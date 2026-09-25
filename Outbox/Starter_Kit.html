@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc 3.11" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Starter Kit</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      white-space: pre-wrap;
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: 1.5em;}
+    div.column{flex: auto;}
+    @media screen {
+    div.columns{gap: min(4vw, 1.5em);}
+    div.column{overflow-x: auto;}
+    }
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Starter Kit</h1>
+</header>
+<h1 id="starter-kit">Starter Kit</h1>
+<p>Start a new <a href="https://claude.com/claude-code">Claude Code</a>
+project with a working method already in place, so the first session is
+about what the project is <em>for</em> rather than how Claude should
+work.</p>
+<h2 id="start-a-project">Start a project</h2>
+<ol type="1">
+<li><p>Get the kit onto your machine, anywhere you like:
+<code>git clone &lt;this repository's URL&gt;</code>.</p></li>
+<li><p>Open Claude Code in any folder and say:</p>
+<blockquote>
+<p>Read <code>&lt;path to the kit&gt;/START_HERE.md</code> and follow
+it. I want a project for &lt;what it’s for&gt;, called <Name>.</p>
+</blockquote></li>
+<li><p>The first time on a machine, Claude asks who you are, where your
+code lives, and how you like to work. It saves that on your machine
+only, never in the kit.</p></li>
+<li><p>Claude drafts the whole setup — what the project is, which
+documents win, the folders, a list of documents to gather — and you
+approve or correct it once.</p></li>
+<li><p>Claude builds it, checks it, saves it to git, and hands you your
+to-do list. Open a new Claude session in the new folder and
+start.</p></li>
+</ol>
+<p><strong>You need:</strong> Claude Code, git, and Python 3.9 or newer.
+Windows, macOS and Linux. GitHub is optional; so is any remote at
+all.</p>
+<h2 id="what-every-project-gets">What every project gets</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<tbody>
+<tr>
+<td><strong>A short CLAUDE.md</strong></td>
+<td>A pointer index held to 10,000 bytes. Instructions files bloat by
+default; this one can’t.</td>
+</tr>
+<tr>
+<td><strong>Document budgets</strong></td>
+<td>Every document has a size ceiling and a gate script that fails when
+one goes over. Ceilings only go down.</td>
+</tr>
+<tr>
+<td><strong>The Cardinal Rule</strong></td>
+<td>Behavior problems get fixed by changing a skill’s structure — a
+required format, a halt, a gate — never with a “remember to” note.</td>
+</tr>
+<tr>
+<td><strong>A knowledge base</strong></td>
+<td>One topic per entry, with frontmatter. The index builds itself.</td>
+</tr>
+<tr>
+<td><strong>Git discipline</strong></td>
+<td>Claude commits named paths and pushes every change. Force-push and
+stash are blocked.</td>
+</tr>
+<tr>
+<td><strong>Permissions</strong></td>
+<td>Your choice at setup: few prompts, or Claude Code’s defaults.</td>
+</tr>
+<tr>
+<td><strong>Skills</strong></td>
+<td><code>process the inbox</code> (one file at a time, halts for your
+verdict), <code>close the session</code> (routes what a session learned;
+most of it to the bin), <code>check docs</code>.</td>
+</tr>
+<tr>
+<td><strong>Desk and lane</strong></td>
+<td>For batched work: one “desk” window hands stamped task sheets to
+visible “lane” windows, each owning its own files, with one save at the
+end. Lanes open as Windows Terminal tabs on Windows; elsewhere the desk
+gives you the command to paste into a new tab.</td>
+</tr>
+<tr>
+<td><strong>An Outbox</strong></td>
+<td>Anything written for you arrives in the format you read — HTML,
+Word, or Markdown.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-stays-current">How it stays current</h2>
+<p>Some files are shared by every project: the gate, the desk-and-lane
+scripts, the method notes. When one is improved inside a project,
+<code>close the session</code> won’t finish until it’s decided: send it
+back to your copy of the kit, take the kit’s newer version, or keep it
+local on purpose. Improvements to someone else’s kit go back as a pull
+request.</p>
+<h2 id="honest-assumptions">Honest assumptions</h2>
+<ul>
+<li>It is opinionated. The budgets and gates are the point; they will
+say no.</li>
+<li>Desk and lane need a Python virtual environment in each project;
+setup builds it and runs the test suite before you start.</li>
+<li>Tested on Windows. macOS and Linux are supported by design; the
+first run there may find a bug — please open an issue.</li>
+</ul>
+<h2 id="layout">Layout</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Path</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>START_HERE.md</code></td>
+<td>The setup procedure Claude follows.</td>
+</tr>
+<tr>
+<td><code>template/</code></td>
+<td>What a new project is made from.</td>
+</tr>
+<tr>
+<td><code>kit_owned.txt</code></td>
+<td>The files kept identical across projects.</td>
+</tr>
+<tr>
+<td><code>scripts/new_project.py</code></td>
+<td>Profile, seed, and adopt (bring an existing project under
+sync).</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

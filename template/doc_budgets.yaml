@@ -1,0 +1,87 @@
+# doc_budgets.yaml — every tracked document, its retrieval tier, and its byte
+# budget. Read by `<venv python> scripts/check_docs.py`. Seeded {{KIT:DATE}} from the
+# Starter Kit; the reasoning behind every rule below is kb/document-budgets.md.
+#
+# RULES OF THIS FILE
+#   * Every tracked `.md` or `.html` outside `exempt_dirs` must be claimed by
+#     exactly one entry, or the gate fails. A new document cannot exist without
+#     someone deciding its tier and budget here — that is the clause that stops
+#     the next unbounded tracker from being created. An exact `path:` beats a
+#     `glob:` that also matches.
+#   * Budgets are ceilings in bytes, measured as the file checks out under
+#     autocrlf (every line ending CRLF). Budgets ONLY EVER GO DOWN: the gate
+#     takes each entry's floor from every past revision of this file, so
+#     committing a raise does not settle it. Lowering re-floors.
+#   * `generated: true` means the file is rendered by `scripts/check_docs.py`
+#     and has no byte budget; its gate is the drift check.
+#   * `glob:` entries are allowed only where the gate already inspects each
+#     matching file individually (kb frontmatter, skill files, commands).
+#   * `rule:` is what the gate prints when the file is over — where the bytes go.
+#   * A comment beside a budget says when and why it last moved. Lowering one
+#     after a trim: set it above the trimmed size, never at it — a ceiling set
+#     just above a fresh trim is the zero-headroom state that caused the trim.
+#
+# TIERS
+#   1  always loaded   — paid every session (CLAUDE.md; the auto-memory index
+#                        is tier 1 too and is gated by the memory check)
+#   2  trigger loaded  — paid when a trigger fires (skills, commands, checklist)
+#   3  on demand       — paid only when a session opens it. A tier-3 document
+#                        nothing points at is tier 4: unread, indistinguishable
+#                        from deleted. The orphan check fails it.
+
+exempt_dirs:
+  - Archive        # backups and processed originals; outside every workflow
+  - Working        # gitignored scratchpads
+  - scripts        # code; its docstrings are its documentation
+  - Inbox          # drops awaiting triage are not documents yet — except the
+                   # manifest, which has its own path row below and the gate
+                   # reaches by exact path before the exemption applies
+  - Outbox         # deliverables FOR THE OWNER, in the format they read.
+                   # Sized by what they need, not by what a session pays to
+                   # load, so no tier or budget says anything true about one.
+  - coordination   # desk-and-lane bookkeeping: task sheets and desk logs,
+                   # written by the desk, archived under closed/ by
+                   # desk_save.py. Job provenance, not a document a session
+                   # loads; a sheet's size is its task's.
+
+entries:
+  # ---- tier 1 -------------------------------------------------------------
+  - path: CLAUDE.md
+    tier: 1
+    budget: 10000        # {{KIT:DATE}}: seeded from the Starter Kit. HAZELHURST scaffolded
+                         # at 9.5k under a 12,000 ceiling and passed it the same day
+                         # with zero documents on file. Start at 10,000 and keep it.
+    rule: Pointers and every-pass rules only. Rationale goes to the script docstring or kb/ entry it explains; a new fact goes to kb/ by kind.
+
+  # ---- tier 2 -------------------------------------------------------------
+  - path: Intake_Checklist.md
+    tier: 2
+    budget: 7200         # {{KIT:DATE}}: seeded. HAZELHURST's reached 7,688 in one job by
+                         # restating kb figures in its cells; the gate's INTAKE check
+                         # now refuses a digit outside backticks in a Status cell.
+    rule: Status rows only — a status word, the missing document, a backticked pointer. A document's contents belong in the kb entry or folder digest the cell points to.
+
+  - glob: skills/*/SKILL.md
+    tier: 2
+    budget: 20000
+    rule: Procedure only. Rationale goes to a kb/ entry the skill points at.
+
+  - glob: .claude/commands/*.md
+    tier: 2
+    budget: 1500
+    rule: The trigger phrase, the key constraints, and nothing else.
+
+  # ---- tier 3 -------------------------------------------------------------
+  - glob: kb/*.md
+    tier: 3
+    budget: 16000
+    rule: One topic per entry with frontmatter. Split a topic before it passes this; supersede rather than append.
+
+  - path: kb/README.md
+    tier: 3
+    generated: true      # rendered from kb/*.md frontmatter by check_docs.py --write-kb
+
+  - path: Inbox/_Manifest.md
+    tier: 3
+    budget: 20000
+    rule: Move drained rows (lowest numbers) to Inbox/_Manifest_Archive.md; the archive gets its own row here when it is created.

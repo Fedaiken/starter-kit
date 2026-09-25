@@ -1,0 +1,45 @@
+{
+  "about": "Why a lane opens on the model it does. Each token is one kind of job; scripts/open_terminal.py derives a lane's model from the token its task sheet names, and refuses any other. This file is the project's own (seeded by the Starter Kit, not kit-owned): a new, changed or removed row is the owner's ruling, never an edit made on the way to something else. model is sonnet or opus (Haiku is never opened); reads_source true means a sheet with that reason must list a source document under reads:, not only files under kb/. prescribed (sonnet) and design-latitude (opus, the catch-all for every job no other row fits) are required. Print the table: <venv python> scripts/open_terminal.py --reasons (.venv/Scripts/python.exe on Windows, .venv/bin/python elsewhere)",
+  "tokens": {
+    "transcribing": {
+      "model": "sonnet",
+      "job": "figures and dates copied from one source document into a record, word for word, verified by script",
+      "reads_source": true
+    },
+    "filing": {
+      "model": "sonnet",
+      "job": "routing documents the owner has already ruled on -- move, record the manifest row, nothing judged",
+      "reads_source": false
+    },
+    "digesting": {
+      "model": "opus",
+      "job": "one document read in full into its kb digest: what it says, with page cites, and what it changes",
+      "reads_source": true
+    },
+    "research": {
+      "model": "opus",
+      "job": "one question answered from primary sources, each with its URL and a retrieved: date",
+      "reads_source": false
+    },
+    "drafting": {
+      "model": "opus",
+      "job": "one letter or document drafted for the owner to review; it serves nothing",
+      "reads_source": false
+    },
+    "checking": {
+      "model": "opus",
+      "job": "the closing check of other lanes' work against the sources, before anything reaches the owner",
+      "reads_source": false
+    },
+    "prescribed": {
+      "model": "sonnet",
+      "job": "build work where the task sheet names the change and a script verifies it",
+      "reads_source": false
+    },
+    "design-latitude": {
+      "model": "opus",
+      "job": "build work where the lane chooses how -- INCLUDING every job no other reason here fits",
+      "reads_source": false
+    }
+  }
+}

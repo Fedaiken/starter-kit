@@ -1,0 +1,7 @@
+# .gitignore — every exclusion carries its rationale.
+# The template's own ignore file is template/_gitignore, renamed at seeding,
+# so that it does not hide template/.claude/settings.local.json from this repo.
+
+# Python bytecode from test runs of the seeder and the template's scripts.
+**/__pycache__/
+*.pyc

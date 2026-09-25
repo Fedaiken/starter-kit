@@ -1,0 +1,49 @@
+# Kit-owned files: identical in every project, kept in step by
+# scripts/kit_sync.py. One path per line, relative to a project root; the
+# kit's copy is template/<path>. Everything else in template/ is seeded:
+# copied once, filled at setup, and the project's from then on.
+# A kit-owned file carries no {{KIT:...}} or {{FILL:...}} marker and no
+# owner's name.
+
+# The gate and the sync
+scripts/check_docs.py
+scripts/kit_sync.py
+
+# Desk and lane
+scripts/project_identity.py
+scripts/open_terminal.py
+scripts/wt.py
+scripts/desk_record.py
+scripts/check_ownership.py
+scripts/desk_save.py
+scripts/lane_guard.py
+scripts/note_prompt.py
+skills/desk/SKILL.md
+skills/lane/SKILL.md
+
+# Tests
+tests/test_check_docs_intake.py
+tests/test_project_identity.py
+tests/test_open_terminal.py
+tests/test_wt.py
+tests/test_desk_record.py
+tests/test_desk_save.py
+tests/test_lane_guard.py
+tests/test_note_prompt.py
+
+# The method
+kb/cardinal-rule-solve-through-structure.md
+kb/document-budgets.md
+kb/git-discipline.md
+kb/how-this-project-remembers.md
+kb/desk-and-lane-philosophy.md
+kb/lane-context-sizing.md
+kb/starter-kit-and-kit-sync.md
+.gitattributes
+
+# Command wrappers
+.claude/commands/check-docs.md
+.claude/commands/close-session.md
+.claude/commands/process-inbox.md
+.claude/commands/desk.md
+.claude/commands/lane.md

@@ -1,0 +1,55 @@
+# .gitignore — every exclusion carries its rationale.
+# If you add a line here, say why. An unexplained exclusion becomes an
+# unexplained missing file six months later. (kb/git-discipline.md)
+
+# --- Secrets and PII ---------------------------------------------------------
+# Logins, portal credentials, API keys. NEVER commit these.
+# If one is ever committed it is burned — rotate it, don't just delete the line.
+.env
+.env.local
+**/credentials.json
+
+# Identity documents, account numbers, screening reports. These stay OUT of
+# version control entirely; tracked prose refers to them by path only.
+**/_private/
+
+# --- Machine-local Claude Code state -----------------------------------------
+# Per-machine permission grants. The REST of .claude/ (commands, settings.json)
+# IS tracked: it holds the project's permission policy and slash commands.
+.claude/settings.local.json
+
+# --- Regenerable / scratch ---------------------------------------------------
+# Working/ holds interrupted-run scratchpads. A scratch file that matters gets
+# routed to kb/ or a real folder by `close the session`; the rest is transient.
+Working/
+
+# Microsoft Office temp lock files
+~$*
+
+# Python bytecode and the venv (rebuilt from kb/platform-and-tools.md).
+**/__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# --- Editor / OS -------------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# DELIBERATELY TRACKED (do not add these):
+#   Inbox/     — drops awaiting triage plus the _Manifest.md decision ledger.
+#   Archive/   — safety-net backups and processed originals. Provenance.
+#   Outbox/    — what the owner reads, opened from the repo.
+#   .kit.json  — which files came from the Starter Kit, for scripts/kit_sync.py.
+# -----------------------------------------------------------------------------
+
+# --- Desk and lane ------------------------------------------------------------
+# Machine-local stall telemetry written by the PermissionRequest hook
+# (scripts/note_prompt.py). The rest of coordination/ — the desk record, the
+# launch record, task sheets, the desk log, closed/ archives — IS tracked: it
+# is the job's provenance, and desk_save.py commits it with the job.
+coordination/prompts.jsonl
+coordination/prompts.jsonl.1

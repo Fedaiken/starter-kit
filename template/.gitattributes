@@ -1,0 +1,12 @@
+# Normalize line endings in the index to LF; checkout follows the platform.
+# Mirrors the sibling projects. Binary records are declared so git never
+# rewrites a lease PDF or a scan.
+* text=auto
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.heic binary
+*.zip binary
