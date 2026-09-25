@@ -36,6 +36,8 @@ When sources conflict, higher wins. Always.
 
 - **Never invent a number or a date.** Not in a document in this repo → "not on file," and stop.
 - **The owner's vocabulary wins.** When {{KIT:OWNER}} coins a name, use it verbatim.
+- **Every deadline is an absolute date**, computed from its trigger (served, received, filed) with the computation shown.
+- **Every figure from outside this repo carries its source** (a URL or a document path) and a `retrieved:` date. A figure without a date is a defect.
 {{FILL: Zero to four more lines, each a rule that applies on every pass in this domain (a jurisdiction, a privacy line, a unit of measure). Delete this marker if there are none yet.}}
 
 ---

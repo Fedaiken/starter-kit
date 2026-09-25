@@ -34,7 +34,7 @@ The owner does not run git. Claude does, every time, without being asked — and
 ## What never enters git
 
 - **Secrets:** `.env`, credentials, API keys. One committed is burned — rotate it, don't just delete the line.
-- **PII:** identity documents, account numbers, screening reports. They live in gitignored `_private/` folders; the tracked prose refers to them by path only.
+- **PII:** identity documents, account numbers, screening reports. They live in gitignored `_private/` folders; the tracked prose refers to them by path only. **File names leak too:** an exported statement or email attachment can carry a full account number in its name, so tracked text keys a private document on an id you assign (`E017`, `stmt-2025-03`), never on its original file name.
 - **Raw dumps** too large or too PII-heavy for a remote. They are sources to mine; what matters gets a kb digest and its original filed through the inbox.
 - **Machine-local state:** `.claude/settings.local.json`, `.venv/`, `Working/`.
 

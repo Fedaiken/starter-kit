@@ -43,6 +43,10 @@ The gate reads every committed revision of `doc_budgets.yaml` and takes each row
 
 **Lowering after a trim: set the ceiling above the trimmed size, not at it.** A ceiling just above a fresh trim is the zero-headroom state that caused the trim, and since budgets never rise, a number chosen too tight today cannot be walked back. The headroom is the deliverable.
 
+## A new document's first ceiling
+
+Size it from how it grows, and write the arithmetic in the row's comment, so the next session can tell a ceiling that was chosen from one that was guessed. A ledger first written at 4,537 b whose rows are about 80 b each gets 6,000 b — about a year more of rows plus the notes under the table — and the comment says so. A closed record (a finished job, a signed document's digest) gets its size plus modest headroom, and the comment names the one event that would make it grow.
+
 ## When a file hits its ceiling — trim, never raise
 
 **The test for cutting a sentence:** is the thing it says enforced somewhere, or written down where a session would already be reading? If yes, the sentence is a second copy that can drift. Remove the copy, not the rule.
