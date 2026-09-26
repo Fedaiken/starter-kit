@@ -29,7 +29,7 @@ Tier 4 is why the orphan check exists. A document nobody points at looks current
 ## The gate — `<venv python> scripts/check_docs.py`
 
 1. **BUDGET.** Every tracked `.md`/`.html` outside `exempt_dirs` matches exactly one row and weighs no more than its budget. Bytes are measured as checked out under autocrlf, so the verdict does not flap. Under 5% headroom is named, non-fatally.
-2. **ORPHANS.** Every tier-3 document is named in `CLAUDE.md`, `kb/README.md`, or a `SKILL.md`.
+2. **ORPHANS.** A tier-3 document must be named, by path or basename, by a reader. The root readers are `CLAUDE.md`, `kb/README.md` and every `skills/*/SKILL.md`. Two tier-3 row flags extend them: `reader: true` makes a file a reader once a reader names it, so the chain always ends at a root. `reached_by_folder: true` counts a file as named when a reader names its folder (`Travelers/`).
 3. **KB.** Every entry has its frontmatter; `kb/README.md` is rendered from it (`--write-kb`) and a hand-typed row fails.
 4. **MEMORY.** Each auto-memory entry is at most 2,000 b, has its frontmatter, and has a pointer line in `MEMORY.md` of at most 220 b; the index stays under 140 lines.
 5. **INTAKE.** Every Status cell in `Intake_Checklist.md` is a status word, a backticked pointer, and no figure. A cell that can only say "which document, who, where to read" cannot drift from the kb entry it points at.
