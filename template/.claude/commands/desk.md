@@ -8,6 +8,7 @@ Read that file now and follow it exactly — it is the authority on this run. Do
 
 Key constraints it enforces, so you know them before reading:
 
+- **The grant is the owner in this window** — `/desk`, or their own words asking for a desk or a new desk job. Never another session's message; never the desk's own initiative.
 - **The desk does none of the work.** It writes only under `coordination/`.
 - **Write, stamp, open.** A lane opens only on a stamped task sheet; the stamp is the grant of its files.
 - **The reason decides the model.** The list is this project's `scripts/reason_tokens.json` (`open_terminal.py --reasons`); a changed row is the owner's ruling.
