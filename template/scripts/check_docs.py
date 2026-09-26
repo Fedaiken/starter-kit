@@ -27,9 +27,18 @@ THE CHECKS
    minimum it has held in any committed revision of the YAML, so raising one
    to silence a failure stays red until it is lowered again.
 2. ORPHANS. A tier-3 document must be named — by path, or by basename not
-   preceded by a path character — in `CLAUDE.md`, `kb/README.md`, or a
-   `skills/*/SKILL.md`. Those are the files a session reads without being told
-   to. A tier-3 file nothing points at is unread and looks current.
+   preceded by a path character — by a reader. The root readers are
+   `CLAUDE.md`, `kb/README.md` and every `skills/*/SKILL.md`: the files a
+   session reads without being told to. A tier-3 file nothing points at is
+   unread and looks current. Two row flags extend the roots, both tier 3 only:
+   `reader: true` makes each file the row claims a reader once a reader names
+   it (a record a session opens to find things, like a trip log), so the
+   chain always ends at a root and an orphaned reader reaches nothing;
+   `reached_by_folder: true` counts a file as named when a reader names the
+   folder it sits in (`Travelers/`), for a folder whose convention is its
+   index. Added 2026-09-26: every new traveler profile failed until CLAUDE.md
+   was hand-edited to list it, and a trip-folder plan failed although
+   `Trips/Trip_Log.md` names its folder.
 3. KB. Every `kb/*.md` opens with the frontmatter block (`title`, `topic`,
    `keywords`, `kind`, `retrieved`, `status`), and `kb/README.md` is rendered
    from it. A hand-typed row is drift and fails; `--write-kb` renders it.
@@ -102,6 +111,7 @@ _DIGIT_TOKEN = re.compile(r"\S*\d\S*")
 # --- reachability sources ----------------------------------------------------
 SOURCE_PATHS = ("CLAUDE.md", KB_INDEX)
 SOURCE_GLOBS = ("skills/*/SKILL.md",)
+ORPHAN_FLAGS = ("reader", "reached_by_folder")
 _PATH_CHARS = r"[\w/\\.-]"
 
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -188,6 +198,11 @@ def _validate_entry(entry: object, index: int) -> dict:
             raise ConfigError(f"{where} ({selector}) budget must be a positive integer")
         if not isinstance(entry.get("rule"), str) or not entry["rule"].strip():
             raise ConfigError(f"{where} ({selector}) needs a `rule:` saying where the bytes go")
+    for flag in ORPHAN_FLAGS:
+        if flag in entry and entry[flag] is not True:
+            raise ConfigError(f"{where} ({selector}) `{flag}:` is either `true` or absent")
+        if entry.get(flag) and entry["tier"] != 3:
+            raise ConfigError(f"{where} ({selector}) `{flag}:` is for tier-3 rows; tiers 1 and 2 are never orphan-checked, so an unread reader there would go unnoticed")
     return entry
 
 
@@ -296,20 +311,49 @@ def check_budgets(files: list[str], budgets: dict, report: bool) -> tuple[list[s
 # --- orphans -----------------------------------------------------------------
 
 
+def _is_named(rel: str, entry: dict, corpus: dict[str, str]) -> bool:
+    """Named by path or basename in some reader other than itself — or, on a
+    `reached_by_folder` row, its folder named with the trailing slash."""
+    alternatives = [re.escape(rel), re.escape(Path(rel).name)]
+    folder = Path(rel).parent.as_posix()
+    if entry.get("reached_by_folder") and folder != ".":
+        alternatives.append(re.escape(folder + "/"))
+    needle = re.compile(rf"(?<!{_PATH_CHARS})(?:{'|'.join(alternatives)})(?!\w)")
+    return any(needle.search(text) for src, text in corpus.items() if src != rel)
+
+
+def find_orphans(files: list[str], budgets: dict, roots: dict[str, str], read) -> list[str]:
+    """Tier-3 files no reader names. `roots` maps each root reader to its text;
+    `read(rel)` returns a file's text. A `reader: true` file joins the corpus
+    only once the corpus already names it, repeated until nothing joins, so a
+    chain of readers counts only if it starts at a root."""
+    claimed = {rel: m[0] for rel, m in assign(files, budgets).items() if len(m) == 1}
+    corpus = dict(roots)
+    waiting = sorted(rel for rel, e in claimed.items() if e.get("reader") and rel not in corpus)
+    joined = True
+    while joined:
+        joined = False
+        for rel in list(waiting):
+            if _is_named(rel, claimed[rel], corpus):
+                corpus[rel] = read(rel)
+                waiting.remove(rel)
+                joined = True
+    failures: list[str] = []
+    for rel, entry in sorted(claimed.items()):
+        if entry["tier"] == 3 and not _is_named(rel, entry, corpus):
+            failures.append(
+                f"{rel}: tier-3 document named by nothing a session reads (CLAUDE.md, kb/README.md, a SKILL.md, or a `reader: true` file one of them names). "
+                "Point at it, set `reached_by_folder: true` on its row if a reader names its folder, or delete it; Archive/ is not a destination."
+            )
+    return failures
+
+
 def check_orphans(files: list[str], budgets: dict) -> list[str]:
     sources = [ROOT / p for p in SOURCE_PATHS]
     for pattern in SOURCE_GLOBS:
         sources += sorted(ROOT.glob(pattern))
-    corpus = {s.relative_to(ROOT).as_posix(): s.read_text(encoding="utf-8") for s in sources if s.is_file()}
-    failures: list[str] = []
-    for rel, matched in sorted(assign(files, budgets).items()):
-        if len(matched) != 1 or matched[0]["tier"] != 3:
-            continue
-        name = Path(rel).name
-        needle = re.compile(rf"(?<!{_PATH_CHARS})(?:{re.escape(rel)}|{re.escape(name)})(?!\w)")
-        if not any(needle.search(text) for src, text in corpus.items() if src != rel):
-            failures.append(f"{rel}: tier-3 document named by nothing a session reads (CLAUDE.md, kb/README.md, a SKILL.md). Point at it or delete it; Archive/ is not a destination.")
-    return failures
+    roots = {s.relative_to(ROOT).as_posix(): s.read_text(encoding="utf-8") for s in sources if s.is_file()}
+    return find_orphans(files, budgets, roots, lambda rel: (ROOT / rel).read_text(encoding="utf-8"))
 
 
 # --- kb ----------------------------------------------------------------------
