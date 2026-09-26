@@ -10,6 +10,7 @@ pinned (`prescribed` on Sonnet, `design-latitude` on Opus); a test that needs
 a Sonnet job and an Opus job uses those two, and the rest are parametrized
 over whatever `scripts/reason_tokens.json` holds.
 """
+import base64
 import json
 import os
 import shlex
@@ -327,6 +328,7 @@ def test_the_window_is_a_named_coloured_tab_with_the_model_written_out(room):
     window = ot.window_for("lane", "lane-alpha", "sheet.md", "opus", resume=False)
     assert window.argv == (
         "claude", "--model", "opus", "--permission-mode", "acceptEdits",
+        "--remote-control", "lane-alpha",
         "--name", "lane-alpha", "/lane lane-alpha sheet.md")
     assert window.window_target == ot.SHARED_WINDOW
     assert window.tab_title == "lane-alpha"
@@ -941,8 +943,8 @@ def by_hand(room, monkeypatch):
 
 def expected_posix_line(name, task, model="opus"):
     return (f"cd '{REPO}' && {pi.ROLE_ENV}=lane {pi.WINDOW_ENV}={name} "
-            f"claude --model {model} --permission-mode acceptEdits --name {name} "
-            f"'/lane {name} {task}'")
+            f"claude --model {model} --permission-mode acceptEdits "
+            f"--remote-control {name} --name {name} '/lane {name} {task}'")
 
 
 def test_a_manual_open_prints_the_line_and_records_it_as_manual(by_hand, capsys):
@@ -1008,6 +1010,114 @@ def test_windows_without_wt_prints_a_powershell_line(room, monkeypatch, capsys):
 ])
 def test_the_manual_reason_says_which_case_it_is(os_name, said):
     assert said in ot.manual_reason(os_name)
+
+
+# --- every window starts with Remote Control on (owner's ruling, 2026-09-26) ----
+
+
+DESK = ["--role", "desk", "--name", "desk", "--model", "fable", "--fable-approved-by-owner"]
+
+
+def rc(name):
+    """The name the phone lists a window under: exactly its `--name`, until a
+    visible-tab measurement shows whether `--remote-control` renames it."""
+    return name
+
+
+def launched_statement(room):
+    """The PowerShell statement inside the last `wt.exe` line this launched:
+    the argv rides in it as a base64 `-EncodedCommand` blob."""
+    blob = room["launched"][-1][-1]
+    return base64.b64decode(blob).decode("utf-16-le")
+
+
+def printed_manual_line(out, os_name):
+    start = "cd '" if os_name == "posix" else "Set-Location"
+    return next(l.strip() for l in out.splitlines() if l.strip().startswith(start))
+
+
+@pytest.mark.parametrize("argv, name", [
+    ([*LANE, "--reason", OPUS_JOB], "lane-alpha"),
+    (DESK, "desk"),
+])
+def test_a_tab_open_carries_remote_control_named_for_the_window(room, argv, name):
+    assert ot.main(argv) == 0
+    assert "& 'claude' " in launched_statement(room)
+    assert f"'--remote-control' '{rc(name)}' '--name' '{name}'" in launched_statement(room)
+    assert record()[-1]["remote_control"] is True
+
+
+@pytest.mark.parametrize("os_name", ["posix", "nt"])
+@pytest.mark.parametrize("argv, name", [
+    ([*LANE, "--reason", OPUS_JOB], "lane-alpha"),
+    (DESK, "desk"),
+])
+def test_the_open_by_hand_line_carries_remote_control(room, monkeypatch, capsys,
+                                                      os_name, argv, name):
+    monkeypatch.setattr(ot, "launch_mode", lambda: ot.OPENED_BY_MANUAL)
+    monkeypatch.setattr(ot, "manual_line",
+                        lambda window, cwd: wt.manual_line(window, cwd=cwd, os_name=os_name))
+    assert ot.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "OPEN BY HAND" in out
+    line = printed_manual_line(out, os_name)
+    said = (f"--remote-control {rc(name)} --name {name}" if os_name == "posix"
+            else f"'--remote-control' '{rc(name)}' '--name' '{name}'")
+    assert said in line
+    assert record()[-1]["remote_control"] is True
+
+
+def test_the_name_always_follows_the_flag_so_nothing_else_is_taken_for_it(room):
+    """The CLI's value is optional: a bare flag would take the next word."""
+    for role, task in (("lane", "sheet.md"), ("desk", None)):
+        argv = ot.window_for(role, "w1", task, "opus", resume=False).argv
+        assert argv[argv.index("--remote-control") + 1] == rc("w1")
+
+
+def test_the_remote_control_name_is_exactly_the_messaging_name(room):
+    """Whether `--remote-control <name>` also renames the session is
+    unmeasured. With the two strings identical, whichever sets the name, the
+    desk and its lanes still message, close and refuse by the window name."""
+    for role, task in (("lane", "sheet.md"), ("desk", None)):
+        argv = ot.window_for(role, "w1", task, "opus", resume=False).argv
+        assert argv[argv.index("--name") + 1] == "w1"
+        assert argv[argv.index("--remote-control") + 1] == "w1"
+    argv = ot.window_for("lane", "w1", None, "opus", resume=True).argv
+    assert argv[argv.index("--remote-control") + 1] == argv[argv.index("--resume") + 1]
+    assert dict(ot.window_for("lane", "w1", "s.md", "opus", resume=False).env)[
+        pi.WINDOW_ENV] == "w1"
+
+
+def test_a_resumed_window_keeps_remote_control(room):
+    argv = ot.window_for("lane", "lane-alpha", None, "opus", resume=True).argv
+    assert argv[argv.index("--remote-control") + 1] == rc("lane-alpha")
+    assert argv[-2:] == ("--resume", "lane-alpha")
+
+
+def test_no_remote_control_turns_it_off_on_both_paths(room, monkeypatch, capsys):
+    assert ot.main([*LANE, "--reason", OPUS_JOB, "--no-remote-control"]) == 0
+    assert "--remote-control" not in launched_statement(room)
+    assert record()[-1]["remote_control"] is False
+    monkeypatch.setattr(ot, "launch_mode", lambda: ot.OPENED_BY_MANUAL)
+    monkeypatch.setattr(ot, "manual_line",
+                        lambda window, cwd: wt.manual_line(window, cwd=cwd, os_name="posix"))
+    assert ot.main(["--role", "lane", "--name", "lane-beta", "--task", "x",
+                    "--reason", OPUS_JOB, "--no-remote-control"]) == 0
+    assert "--remote-control" not in printed_manual_line(capsys.readouterr().out, "posix")
+    assert record()[-1]["remote_control"] is False
+
+
+def test_a_dry_run_says_whether_remote_control_is_on(room, capsys):
+    """The `wt.exe` line hides the argv in an encoded blob, so it is said."""
+    assert ot.main([*LANE, "--reason", OPUS_JOB, "--dry-run"]) == 0
+    assert f"remote control: {rc('lane-alpha')}" in capsys.readouterr().out
+    assert ot.main([*LANE, "--reason", OPUS_JOB, "--dry-run", "--no-remote-control"]) == 0
+    assert "remote control: off (--no-remote-control)" in capsys.readouterr().out
+
+
+def test_the_docstring_documents_the_off_switch():
+    assert ot.NO_REMOTE_CONTROL_FLAG in ot.__doc__
+    assert "REMOTE CONTROL" in ot.__doc__
 
 
 # --- closing, per machine -------------------------------------------------------
