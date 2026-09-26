@@ -112,7 +112,7 @@ Each lane sends `ack <lane>: <reason>, sheet <first 12 of its digest>` when it s
 | Kind | When | Shape |
 |---|---|---|
 | correction | the owner ruled something that touches files a lane owns | the line `desk_record.py route` prints — **never typed by hand** (Step 4) |
-| two-file | a lane reported a fact that also belongs in another lane's file | `[desk] two-file: <the fact, as the finding lane worded it> — your side: <path>; other side: <lane>, <path>` — sent to the OTHER file's owner, and a copy to the finder naming the agreed wording |
+| two-file | a lane reported a fact that also belongs in another lane's file | `[desk] two-file: <the fact, as the finding lane worded it> — your side: <path>; other side: <lane>, <path>` — sent to the OTHER file's owner, and a copy to the finder naming the agreed wording. Never tell the finder to cut its copy: crossed messages lose the fact from both files |
 | answer | a lane asked a question — or reported a same-family `outside:` (Step 4), whose answer has one fixed shape | `[desk] answer: <the answer — the owner's words word for word when it was theirs to give>` |
 | ownership | a lane's paths changed | the line `desk_record.py own` / `disown` prints |
 | stop | a lane must stop now | `[desk] stop: <why>` — the lane stops mid-task, reports its state in one line, and waits |
