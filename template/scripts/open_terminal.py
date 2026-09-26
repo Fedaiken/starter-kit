@@ -6,6 +6,7 @@ on Windows and `.venv/bin/python` elsewhere -- `project_identity.venv_python`):
     <venv python> scripts/open_terminal.py --role lane --name digest-agreement --reason design-latitude --task coordination/task_sheets/digest-agreement.md
     <venv python> scripts/open_terminal.py --role lane --name copy-march --reason prescribed --task coordination/task_sheets/copy-march.md --dry-run
     <venv python> scripts/open_terminal.py --role desk --name desk --model fable --fable-approved-by-owner
+    <venv python> scripts/open_terminal.py --role lane --name copy-march --reason prescribed --task coordination/task_sheets/copy-march.md --no-remote-control --dry-run
     <venv python> scripts/open_terminal.py --reasons
     <venv python> scripts/open_terminal.py --list
     <venv python> scripts/open_terminal.py --close --name copy-march
@@ -57,6 +58,23 @@ every project writes its own rows; `prescribed` and `design-latitude` are in
 every project's file. A file that is missing, malformed, names another model,
 or lacks either of those two is refused at import: nothing here opens a lane
 on a guess. `--reasons` prints the table.
+
+EVERY WINDOW STARTS WITH REMOTE CONTROL ON (the owner's ruling, 2026-09-26)
+--------------------------------------------------------------------------
+A lane stopped at a permission prompt while the owner is away from the
+machine cannot be reached, and `/remote-control` cannot be typed into a lane
+from outside it. So every window this opens -- lane and desk, a Windows
+Terminal tab and the line pasted by hand, a fresh open and a `--resume` --
+starts with `--remote-control <window name>` on its command line, the same
+string as its `--name`, and the owner's phone lists it under the name on its
+tab. A project prefix on that name (the phone's list is account-wide, and
+other projects' windows share names) is DEFERRED: the docs do not say whether
+`--remote-control <name>` also renames the session, and a rename would break
+the name the desk and its lanes message by, `--close` and the taken-name
+check. It waits for a visible-tab measurement of that. `--no-remote-control` opens
+a window without it. The dry run prints which, and the record carries
+`remote_control: true|false`, because the `wt.exe` line shows the argv only as
+an encoded blob.
 
 THE RECORD
 ----------
@@ -304,6 +322,12 @@ MAX_OPEN_LANES = 15
 #: be read off the window running under it. The spelling is the CLI's own.
 LAUNCHED_PERMISSION_MODE = "acceptEdits"
 
+#: The CLI's own flag for a session reachable from the owner's phone
+#: (`claude --help`: `--remote-control [name]`), and the launcher's way to
+#: open a window without it.
+REMOTE_CONTROL_FLAG = "--remote-control"
+NO_REMOTE_CONTROL_FLAG = "--no-remote-control"
+
 RECORD = REPO / "coordination" / "launch_record.jsonl"
 
 #: Where `--close` plants the marker and where the window it closes looks for
@@ -493,6 +517,18 @@ def permission_args() -> list[str]:
     return ["--permission-mode", LAUNCHED_PERMISSION_MODE]
 
 
+def remote_control_args(name: str, remote_control: bool) -> list[str]:
+    """`--remote-control <name>`, or nothing when it is turned off.
+
+    The value is ALWAYS passed: the CLI's value is optional, so a bare flag
+    would take the next word of the command line as the session's name. And it
+    is EXACTLY the `--name` string: whether `--remote-control <name>` also sets
+    the session's name is unmeasured, and with the two the same, whichever one
+    wins, the name the desk and its lanes message each other by cannot change.
+    """
+    return [REMOTE_CONTROL_FLAG, name] if remote_control else []
+
+
 def session_cwd() -> str:
     """The working directory AS THE RUNNING SESSION SPELLS IT.
 
@@ -527,13 +563,15 @@ def tab_color(role: str, model: str) -> str | None:
 
 
 def window_for(role: str, name: str, task: str | None, model: str, *,
-               resume: bool) -> Window:
+               resume: bool, remote_control: bool = True) -> Window:
     """The window to open, as `wt` wants it.
 
     `--resume` opens the persisted session by name and carries NO role prompt:
-    that window is already in role.
+    that window is already in role. Remote Control is on unless
+    `remote_control` is False, on every role and on a resume alike.
     """
-    argv: list[str] = [CLAUDE, "--model", model, *permission_args()]
+    argv: list[str] = [CLAUDE, "--model", model, *permission_args(),
+                       *remote_control_args(name, remote_control)]
     if resume:
         argv += ["--resume", name]
     else:
@@ -1109,6 +1147,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true",
                         help="reopen the persisted session of this name, in "
                              "role already")
+    parser.add_argument(NO_REMOTE_CONTROL_FLAG, dest="remote_control",
+                        action="store_false",
+                        help=f"open the window without {REMOTE_CONTROL_FLAG} "
+                             "<name>; every window has it otherwise")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the command line and the first "
                              "instruction; open nothing and record nothing")
@@ -1170,7 +1212,7 @@ def run(argv: Sequence[str] = ()) -> int:
         tier = tier_choice(args.role, model, args.reason)
         cwd = session_cwd()
         window = window_for(args.role, name, args.task, tier.model,
-                            resume=args.resume)
+                            resume=args.resume, remote_control=args.remote_control)
         mode = launch_mode()
         command = window_command(window, cwd=cwd) if mode == OPENED_BY_WT else None
         live_here = here(live_sessions())
@@ -1191,6 +1233,8 @@ def run(argv: Sequence[str] = ()) -> int:
         print(f"{window.label}, opened by hand: {manual_reason()}")
     print(f"  model: {tier.model} - {tier.reason}: {tier.why}")
     print(f"  first instruction: {window.argv[-1]}")
+    print(f"  remote control: {name}" if args.remote_control
+          else f"  remote control: off ({NO_REMOTE_CONTROL_FLAG})")
     if command is not None:
         print(f"  closes its pane on: {window.close_marker}")
         print(f"  {command_line(command)}")
@@ -1221,6 +1265,7 @@ def run(argv: Sequence[str] = ()) -> int:
         "reason": tier.reason, "model": tier.model,
         "task": (args.task or "").strip(), "resumed": bool(args.resume),
         "opened_by": OPENED_BY_WT if command is not None else OPENED_BY_MANUAL,
+        "remote_control": bool(args.remote_control),
     })
     return 0
 
