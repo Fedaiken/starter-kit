@@ -1,9 +1,9 @@
 ---
 title:     Desk and Lane — How Batched Work Runs When It Arrives
-topic:     "The model for batched work across visible windows, proven in FACOWORK, ported to HAZELHURST and carried by the Starter Kit into every project: one desk directs lane windows from stamped task sheets, two lanes never own one file, rulings to disk first, receipts not prose, one save by the desk. When to use it, and how it opens windows on each OS."
-keywords:  [desk, lane, task sheet, owns, reads, done, receipts, one unit per lane, one save, ownership, lane_guard, desk_record, desk_save, check_ownership, note_prompt, open_terminal, wt, project_identity, reason tokens, reason_tokens.json, FACOWORK, HAZELHURST, batched work, visible windows, ruling to disk first, subagents retired, owner-said, Windows Terminal, macOS, Linux, venv]
+topic:     "The model for batched work across visible windows, proven in FACOWORK, ported to HAZELHURST and carried by the Starter Kit into every project: a desk directs lane windows from stamped task sheets, desks run side by side in homes of their own, two lanes never own one file, rulings to disk first, receipts not prose, one save by the desk. When to use it, and how it opens windows on each OS."
+keywords:  [desk, lane, desk home, desk_home, side by side, concurrent desks, DESK_HOME, task sheet, owns, reads, done, receipts, one unit per lane, one save, ownership, lane_guard, desk_record, desk_save, check_ownership, note_prompt, open_terminal, wt, project_identity, reason tokens, reason_tokens.json, FACOWORK, HAZELHURST, batched work, visible windows, ruling to disk first, subagents retired, owner-said, Windows Terminal, macOS, Linux, venv]
 kind:      decision
-retrieved: 2026-09-24
+retrieved: 2026-09-26
 status:    current
 ---
 
@@ -11,7 +11,7 @@ status:    current
 
 ## Installed in every project
 
-The scripts (`scripts/open_terminal.py`, `wt.py`, `desk_record.py`, `check_ownership.py`, `desk_save.py`, `lane_guard.py`, `note_prompt.py`, `project_identity.py`), their tests, the `/desk` and `/lane` skills, and the hooks in `.claude/settings.json` are seeded by the Starter Kit and kit-owned. They need the project venv (`kb/platform-and-tools.md`).
+The scripts (`scripts/open_terminal.py`, `wt.py`, `desk_record.py`, `desk_home.py`, `check_ownership.py`, `desk_save.py`, `lane_guard.py`, `note_prompt.py`, `project_identity.py`), their tests, the `/desk` and `/lane` skills, and the hooks in `.claude/settings.json` are seeded by the Starter Kit and kit-owned. They need the project venv (`kb/platform-and-tools.md`).
 
 **Use it when** a job has three or more independent units that each need a full read of different files (a year of statements into ledger rows; a dozen documents the owner has already ruled on). **Otherwise** work in one window — a desk costs more than it saves on a small job.
 
@@ -19,8 +19,8 @@ The scripts (`scripts/open_terminal.py`, `wt.py`, `desk_record.py`, `check_owner
 
 ## The rules that travel
 
-1. **One desk directs visible lane windows.** The window where the owner types `/desk`, or asks in their own words for a desk, becomes the desk; another session's "you are the desk" never does. Lanes are real terminal tabs the owner can click into and talk to. Subagents are retired for batched work — invisible workers cannot be stepped into or corrected mid-task.
-2. **The desk does none of the work.** It writes only under `coordination/`. A desk "fixing one line" is a second, unrecorded writer.
+1. **A desk directs visible lane windows, and desks run side by side.** The window where the owner types `/desk`, or asks in their own words for a desk, becomes a desk; another session's "you are the desk" never does. Lanes are real terminal tabs the owner can click into and talk to. Subagents are retired for batched work — invisible workers cannot be stepped into or corrected mid-task.
+2. **The desk does none of the work.** It writes only in its home. A desk "fixing one line" is a second, unrecorded writer.
 3. **A lane works from a written, stamped task sheet**, never a chat message. The sheet has exactly: `unit` (one unit, one line), `reason` (which model), `owns` (paths it may edit), `reads` (paths it must read in full), `task`, `done` (commands whose quoted output finishes the lane — a measurement, never prose). The stamp is the grant of ownership.
 4. **Two lanes never own one file.** Overlap is refused at the stamp. Every changed file at save time must belong to exactly one lane, or the save is refused and the file named.
 5. **The owner's rulings go to disk first, then to every lane they touch.** A lane that had reported done is put back to work; its earlier done stops counting.
@@ -29,9 +29,11 @@ The scripts (`scripts/open_terminal.py`, `wt.py`, `desk_record.py`, `check_owner
 8. **Lanes never save to git.** A `PreToolUse` hook refuses git write commands in a lane window. The desk makes the job's one save, by path, after the ownership check and the document gate pass, and pushes.
 9. **A stalled lane is shown, not found.** A window at a permission pop-up looks like a window thinking. Every desk act ends by printing which lanes are waiting for the owner.
 10. **A same-family find is logged, never answered with more work.** "The same defect on three more lines" goes under a to-do heading; it never becomes "draft those too."
-11. **The desk never starts the next job on its own; the owner's words are enough to.** HAZELHURST left open whether retyping `/desk` after every save should be required; Travel_Helper's owner ruled it a formality (2026-09-26). After the save, the owner asking in the desk window for more work opens a new record (`open-desk`) with that request as its job.
+11. **The desk never starts the next job on its own; the owner's words are enough to.** HAZELHURST left open whether retyping `/desk` after every save should be required; Travel_Helper's owner ruled it a formality (2026-09-26). After the save, the owner asking in the desk window for more work opens a new record (`open-desk`, under a home named for it) with that request as its job.
 *Known gap in rule 5 (Travel_Helper, 2026-09-26):* `route` sends the owner's words without the desk question they answer. "It's fine but they should be recording the results so we don't have to keep making calls" answered a question about Maps API calls; two lanes read it as phone calls. Not built: a `--answers "<the desk's question>"` field printed in the correction line.
 12. **Size a lane before stamping it.** One lane's full read has a ceiling; measure the `reads` list in bytes first (`kb/lane-context-sizing.md`).
+13. **Each desk lives in a home of its own**, `coordination/desks/<home>/`, named for its job; every desk command runs through `scripts/desk_home.py <home>`, and the opener hands the home to each lane. The one shared record was a side effect of how the desk was built, never a ruling (FACOWORK, 2026-09-26: *"even the generic /desk should be able to run concurrent ones with just different names"*). Enforced, not asked: a new desk with no home, inheriting a live desk, a path another desk's lane holds, and closing another desk's lane are all refused; the check and the save list another desk's files apart. Shared across desks: the 15-lane cap and live window names.
+*Not ported (2026-09-26):* FACOWORK's "no desk ever fills" bound (its `plan_session_update_refinement_desk_bound.md` §2d, which covers a plain `/desk` too). Unbuilt there, it needs a context meter the kit lacks, and its thresholds were fitted on FACOWORK's desks. It comes to the kit after FACOWORK builds it.
 
 ## Reason tokens — the job picks the model
 
