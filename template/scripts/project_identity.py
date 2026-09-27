@@ -127,6 +127,12 @@ ENV_SLUG = env_slug(NAME)
 ROLE_ENV = f"{ENV_SLUG}_ROLE"
 WINDOW_ENV = f"{ENV_SLUG}_WINDOW"
 
+#: The desk home a desk tool reads and writes (`scripts/desk_record.py`): set
+#: for the desk's own commands by `scripts/desk_home.py`, and handed by the
+#: opener to every lane window it starts. FACOWORK's `FACOWORK_DESK_HOME`,
+#: named here for the project like the two above.
+DESK_HOME_ENV = f"{ENV_SLUG}_DESK_HOME"
+
 #: The Windows Terminal window every desk and lane tab opens in.
 SHARED_WINDOW = window_slug(NAME)
 
