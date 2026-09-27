@@ -3,10 +3,10 @@
 
 Usage (from the workspace root; `<venv python>` is `.venv/Scripts/python.exe`
 on Windows and `.venv/bin/python` elsewhere -- `project_identity.venv_python`):
-    <venv python> scripts/open_terminal.py --role lane --name digest-agreement --reason design-latitude --task coordination/task_sheets/digest-agreement.md
-    <venv python> scripts/open_terminal.py --role lane --name copy-march --reason prescribed --task coordination/task_sheets/copy-march.md --dry-run
+    <venv python> scripts/open_terminal.py --role lane --name digest-agreement --reason design-latitude --task coordination/desks/statements/task_sheets/digest-agreement.md
+    <venv python> scripts/open_terminal.py --role lane --name copy-march --reason prescribed --task coordination/desks/statements/task_sheets/copy-march.md --dry-run
     <venv python> scripts/open_terminal.py --role desk --name desk --model fable --fable-approved-by-owner
-    <venv python> scripts/open_terminal.py --role lane --name copy-march --reason prescribed --task coordination/task_sheets/copy-march.md --no-remote-control --dry-run
+    <venv python> scripts/open_terminal.py --role lane --name copy-march --reason prescribed --task coordination/desks/statements/task_sheets/copy-march.md --no-remote-control --dry-run
     <venv python> scripts/open_terminal.py --reasons
     <venv python> scripts/open_terminal.py --list
     <venv python> scripts/open_terminal.py --close --name copy-march
@@ -588,8 +588,23 @@ def window_for(role: str, name: str, task: str | None, model: str, *,
         tab_color=tab_color(role, model),
         # What `scripts/lane_guard.py` reads: a window knows its own role from
         # the moment it starts, with nothing to remember and nobody to ask.
-        env=((identity.ROLE_ENV, role), (identity.WINDOW_ENV, name)),
+        # The desk's home goes too (`scripts/desk_home.py`), so the lane's
+        # `desk_record.py show` and `report-done` reach its own desk's record.
+        env=((identity.ROLE_ENV, role), (identity.WINDOW_ENV, name),
+             *lane_home_env()),
     )
+
+
+def desk_home() -> str:
+    """The desk home this opener runs under; empty for none."""
+    return os.environ.get(identity.DESK_HOME_ENV, "").strip()
+
+
+def lane_home_env() -> tuple[tuple[str, str], ...]:
+    """The desk home this opener runs under, as one env pair -- none when the
+    opener runs with no home."""
+    home = desk_home()
+    return ((identity.DESK_HOME_ENV, home),) if home else ()
 
 
 def launch_mode(os_name: str | None = None, has_wt: bool | None = None) -> str:
@@ -760,9 +775,20 @@ def require_a_safe_close(name: str, row: dict, abandoned: str | None) -> None:
     lane of this desk and closes plainly -- tidying strays is what --close is
     for. `--abandoned "<why>"` is the way past both, and the why is recorded.
     """
+    import desk_record
+
+    try:
+        # Desks run side by side: a lane of ANOTHER desk is that desk's to
+        # close, --abandoned or not -- its record is the one a close updates.
+        theirs = None if desk_record.is_a_lane(name) else desk_record.another_desks_lane(name)
+    except desk_record.DeskError:
+        theirs = None
+    if theirs:
+        raise TerminalError(
+            f"{name} is a lane of {theirs}, not of this desk. That desk closes "
+            f"it; nothing was closed")
     if abandoned:
         return
-    import desk_record
 
     try:
         a_lane = desk_record.is_a_lane(name)
@@ -896,7 +922,8 @@ def list_windows() -> int:
         entry = latest.get(name)
         if entry and entry.get("event") == "open":
             what = (f"{entry.get('role')}, {entry.get('model')} - "
-                    f"{entry.get('reason')}, opened {entry.get('at')}")
+                    f"{entry.get('reason')}, opened {entry.get('at')}"
+                    + (f", desk home {entry['home']}" if entry.get("home") else ""))
         else:
             what = "not opened by this launcher (the owner's own window, or a desk they started)"
         print(f"  {name:<24} {str(row.get('status')):<6} {what}")
@@ -1266,6 +1293,7 @@ def run(argv: Sequence[str] = ()) -> int:
         "task": (args.task or "").strip(), "resumed": bool(args.resume),
         "opened_by": OPENED_BY_WT if command is not None else OPENED_BY_MANUAL,
         "remote_control": bool(args.remote_control),
+        "home": desk_home() or None,
     })
     return 0
 
