@@ -4,7 +4,7 @@
 Usage (from the workspace root; `<venv python>` is `.venv/Scripts/python.exe`
 on Windows and `.venv/bin/python` elsewhere -- `project_identity.venv_python`):
     <venv python> scripts/desk_record.py open-desk --desk the-desk --job "a year of statements into the records"
-    <venv python> scripts/desk_record.py stamp copy-march coordination/task_sheets/copy-march.md --desk the-desk
+    <venv python> scripts/desk_record.py stamp copy-march coordination/desks/statements/task_sheets/copy-march.md --desk the-desk
     <venv python> scripts/desk_record.py own copy-march records/2025/March.md --desk the-desk
     <venv python> scripts/desk_record.py disown copy-march records/2025/March.md --desk the-desk
     <venv python> scripts/desk_record.py route records/2025/March.md --ruling "the March deposit was a refund, not income" --desk the-desk
@@ -12,6 +12,11 @@ on Windows and `.venv/bin/python` elsewhere -- `project_identity.venv_python`):
     <venv python> scripts/desk_record.py show
     <venv python> scripts/desk_record.py show copy-march
     <venv python> scripts/desk_record.py close-desk --desk the-desk
+
+A desk runs every one of these through its home, e.g.
+`<venv python> scripts/desk_home.py statements desk_record.py show` (DESKS
+SIDE BY SIDE, below). A lane runs `show` and `report-done` bare: the opener
+started its window with the home already set.
 
 WHY THIS EXISTS
 ---------------
@@ -48,9 +53,28 @@ ONE ACT, NOT TWO
 SINGLE WRITER
 -------------
 The desk writes this record and nothing else does; a lane's one write is its
-own `coordination/done/<lane>.json`, through `report-done`. `--desk` is checked
-against the name on file: cooperative, not security, but it is the difference
-between a lane that briefed itself and one that was briefed.
+own `done/<lane>.json` in the desk's home, through `report-done`. `--desk` is
+checked against the name on file: cooperative, not security, but it is the
+difference between a lane that briefed itself and one that was briefed.
+
+DESKS SIDE BY SIDE, EACH IN ITS OWN HOME
+----------------------------------------
+One record for the whole project meant a second desk could not open while any
+other was on file -- a side effect of how the desk was built, never a ruling
+(FACOWORK, 2026-09-26: "it should only ever be constrained with its own runs,
+not other desks' runs"; "even the generic /desk should be able to run
+concurrent ones with just different names"). So every desk lives in a HOME,
+`coordination/desks/<name>/`: its record, sheets, done files, log and closed
+archive. A desk runs each of its tools through `scripts/desk_home.py <name>`,
+which sets the home variable (`project_identity.DESK_HOME_ENV`); the opener
+hands the same home to every lane window it starts, so a lane's plain `show`
+and `report-done` reach its own desk. A NEW desk with no home is refused at
+`open-desk`, so a desk that forgot the wrapper finds out at its first act.
+What the one record used to buy -- no two lanes own one file -- still holds
+ACROSS desks: `stamp` and `own` refuse a path another live desk's lane holds,
+and the ownership check and the save read another desk's files as that
+desk's, never as strays. `coordination/` itself stays a home for a record
+left there before homes (inherit it, save it); nothing new opens there.
 
 Exit codes:
     0 = done
@@ -79,20 +103,65 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
+import project_identity as identity  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 COORDINATION = "coordination"
-RECORD = REPO / COORDINATION / "desk_record.json"
-DONE_DIR = REPO / COORDINATION / "done"
-DESK_LOG = REPO / COORDINATION / "desk_log.md"
-CLOSED_DIR = REPO / COORDINATION / "closed"
 
-#: The desk's own row. Everything under `coordination/` is the desk's -- this
-#: record, the launch record the opener appends to, task sheets, done files --
-#: or every job's ownership check would fail on the desk's own bookkeeping
+#: Where a desk lives (the docstring's DESKS SIDE BY SIDE): `coordination/` for
+#: a record left from before homes, `coordination/desks/<name>/` for every desk
+#: opened since, named by `HOME_ENV` -- set by `scripts/desk_home.py` for the
+#: desk's own commands and by the opener for each lane window.
+HOME_ENV = identity.DESK_HOME_ENV
+DESKS_DIR = f"{COORDINATION}/desks"
+#: What every desk's opener appends to, whatever its home; each homed desk owns
+#: it by name, so whichever desk saves while it has changed saves it.
+SHARED_LAUNCH_RECORD = f"{COORDINATION}/launch_record.jsonl"
+
+#: The desk's own row. Everything in its home is the desk's -- this record,
+#: task sheets, done files -- plus the launch record the opener appends to, or
+#: every job's ownership check would fail on the desk's own bookkeeping
 #: (carried from slice 1).
 DESK_LANE = "desk"
 NL = chr(10)
-DESK_OWNS = (COORDINATION,)
+
+_HOME_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def home_path(name: str | None) -> str:
+    """The repo-relative home of the desk named `name`; `coordination` for none."""
+    name = (name or "").strip()
+    if not name:
+        return COORDINATION
+    if not _HOME_NAME.match(name):
+        raise ValueError(
+            f"{HOME_ENV}={name!r} is not a desk home name: lowercase letters, "
+            f"digits and dashes, named for the job, e.g. nola-sweets")
+    return f"{DESKS_DIR}/{name}"
+
+
+def use_home(name: str | None) -> None:
+    """Point this module at the desk home `name` (None or "" = `coordination`)."""
+    global HOME, RECORD, DONE_DIR, DESK_LOG, CLOSED_DIR, DESK_OWNS
+    HOME = home_path(name)
+    RECORD = REPO / HOME / "desk_record.json"
+    DONE_DIR = REPO / HOME / "done"
+    DESK_LOG = REPO / HOME / "desk_log.md"
+    CLOSED_DIR = REPO / HOME / "closed"
+    DESK_OWNS = (HOME,) if HOME == COORDINATION else (HOME, SHARED_LAUNCH_RECORD)
+
+
+def home_name() -> str | None:
+    """This desk's home name as `desk_home.py` takes it; None for `coordination/`."""
+    return None if HOME == COORDINATION else HOME.rsplit("/", 1)[-1]
+
+
+try:
+    use_home(os.environ.get(HOME_ENV))
+    HOME_PROBLEM: str | None = None
+except ValueError as _exc:
+    use_home(None)
+    HOME_PROBLEM = str(_exc)
 
 #: The fields of a task sheet, each opening a line. `owns:` and `reads:` are
 #: lists of `- path` lines; the rest are text.
@@ -236,6 +305,88 @@ def owners_of(record: dict, path: str) -> list[str]:
     )
 
 
+# --- the other desks --------------------------------------------------------
+
+
+def other_desks() -> dict[str, dict]:
+    """Every OTHER live desk's record, by its home: the one at `coordination/`
+    and each under `coordination/desks/<name>/`, this desk's own left out. An
+    unreadable record is skipped here -- it is that desk's to repair, and its
+    own acts say so."""
+    found: dict[str, dict] = {}
+    candidates = [REPO / COORDINATION / "desk_record.json",
+                  *sorted((REPO / DESKS_DIR).glob("*/desk_record.json"))]
+    for path in candidates:
+        home = path.parent.relative_to(REPO).as_posix()
+        if home == HOME:
+            continue
+        try:
+            record = read_record(path)
+        except DeskError:
+            continue
+        if record is not None:
+            found[home] = record
+    return found
+
+
+def home_of(path: str, homes: Sequence[str]) -> str | None:
+    """The most specific of `homes` that holds `path`, or None."""
+    holding = [home for home in homes if covers(home, path)]
+    return max(holding, key=len) if holding else None
+
+
+def another_desks_claim(path: str, others: dict[str, dict] | None = None) -> str | None:
+    """Why `path` is another live desk's, or None when it is no other desk's.
+
+    Another desk's own home (its record, sheets, done files), and any file one
+    of its lanes or its desk row holds outside `coordination/`. Inside
+    `coordination/` only the homes decide: the shared launch record is owned by
+    every homed desk by name, and a desk at `coordination/` owns the whole
+    folder, so ownership rows there would make every desk claim every other's.
+    """
+    others = other_desks() if others is None else others
+    home = home_of(path, [HOME, *others])
+    if home is not None and home != HOME:
+        return f"desk {others[home].get('desk')!r} ({home}): {others[home].get('job')}"
+    if covers(COORDINATION, path):
+        return None
+    for home, record in others.items():
+        for lane, row in record["lanes"].items():
+            if any(covers(owned, path) for owned in row.get("owns", [])):
+                return (f"desk {record.get('desk')!r} ({home}), lane {lane}: "
+                        f"{record.get('job')}")
+    return None
+
+
+def other_desks_collisions(paths: Sequence[str]) -> list[str]:
+    """A path given here that sits inside, or above, a file another live desk
+    holds. Two desks never hand out one file."""
+    hits: list[str] = []
+    for home, record in other_desks().items():
+        for path in paths:
+            for lane, row in record["lanes"].items():
+                for owned in row.get("owns", []):
+                    if covers(COORDINATION, owned):
+                        continue
+                    if overlap(path, owned):
+                        hits.append(f"{path} overlaps {owned}, which is {lane}'s "
+                                    f"at desk {record.get('desk')!r} ({home})")
+    return hits
+
+
+def another_desks_lane(name: str) -> str | None:
+    """Which other live desk has `name` as an unclosed lane, or None. The
+    opener asks before a close: a lane is closed by its own desk, whose record
+    the close updates -- closed from here, its row would stay open for good."""
+    if name == DESK_LANE:
+        return None
+    for home, record in other_desks().items():
+        row = record["lanes"].get(name)
+        if row is not None and not is_closed(row):
+            return f"desk {record.get('desk')!r} ({home})"
+    return None
+
+
 # --- the record -------------------------------------------------------------
 
 
@@ -266,13 +417,22 @@ def write_record(record: dict, path: Path | None = None) -> None:
     os.replace(scratch, path)
 
 
+def require_home() -> None:
+    if HOME_PROBLEM:
+        raise DeskError(HOME_PROBLEM)
+
+
 def require_record() -> dict:
+    require_home()
     record = read_record()
     if record is None:
         raise DeskError(
-            "there is no desk record, so there is no desk. The owner starts one "
-            "by typing /desk in a window of their own, and "
-            "that window runs `desk_record.py open-desk`"
+            f"there is no desk record in {HOME}/, so there is no desk here. The "
+            f"owner starts one by typing /desk in a window of their own, and "
+            f"that window runs `desk_record.py open-desk` through `scripts/"
+            f"desk_home.py <home>`. A desk's tools always run through that "
+            f"wrapper; a bare desk command reads `coordination/`, where no new "
+            f"desk opens. Desks on file: {sorted(other_desks()) or 'none'}"
         )
     return record
 
@@ -670,14 +830,16 @@ def record_close(lane: str, *, abandoned: str | None = None) -> None:
 
 
 def open_desk(desk: str, job: str, *, inherit: bool) -> list[str]:
+    require_home()
     record = read_record()
     if record is not None:
         if not inherit:
             raise DeskError(
-                f"a desk record is already on file: desk {record.get('desk')!r}, "
-                f"job {record.get('job')!r}. If that desk is gone and you are "
-                f"its replacement, run this again with --inherit; if its job "
-                f"is finished, it is closed with `close-desk` first"
+                f"a desk record is already on file in {HOME}/: desk "
+                f"{record.get('desk')!r}, job {record.get('job')!r}. A NEW job "
+                f"opens under a home name of its own -- desks run side by side, "
+                f"and this home is taken. Only if that desk's window is gone "
+                f"and you are its replacement, run this again with --inherit"
             )
         was = record.get("desk")
         record["desk"] = desk
@@ -711,7 +873,7 @@ def stamp(desk: str, lane: str, sheet: str) -> list[str]:
             + "\n".join(f"  - {p}" for p in problems) + "\nNothing was stamped."
         )
     owns = sheet_owns(text)
-    hits = collisions(record, lane, owns)
+    hits = collisions(record, lane, owns) + other_desks_collisions(owns)
     if hits:
         raise DeskError(
             "two lanes cannot own one file:\n"
@@ -747,7 +909,8 @@ def own(desk: str, lane: str, paths: Sequence[str], *, give: bool) -> list[str]:
                                 f"the real path. Nothing was changed.")
     cleaned = [clean_path(p) for p in paths]
     if give:
-        hits = collisions(record, lane, cleaned)
+        hits = collisions(record, lane, cleaned) + other_desks_collisions(
+            [p for p in cleaned if not covers(COORDINATION, p)])
         if hits:
             raise DeskError("two lanes cannot own one file:\n"
                             + "\n".join(f"  - {h}" for h in hits)
@@ -882,7 +1045,46 @@ def show(lane: str | None) -> list[str]:
 
 def close_desk(desk: str) -> list[str]:
     """Archive, never delete: the record, sheets and done files of a finished
-    job move under `coordination/closed/<stamp>/`."""
+    job move under `closed/<stamp>/` in the desk's home."""
+    target = archive_desk(desk)
+    return [f"desk closed; its record is under {target.relative_to(REPO).as_posix()}"]
+
+
+def archived_moves(target: Path) -> list[tuple[Path, Path]]:
+    """(where each piece of a closed desk lives under `target`, where it lived
+    while the desk was open)."""
+    return [(target / RECORD.name, RECORD),
+            (target / DONE_DIR.name, DONE_DIR),
+            (target / "task_sheets", REPO / HOME / "task_sheets"),
+            (target / DESK_LOG.name, DESK_LOG)]
+
+
+def reopen_archived(target: Path) -> None:
+    """Undo :func:`archive_desk`: the record, done files, sheets and log move
+    back from `target`, and the emptied folder goes.
+
+    For the save whose commit FAILED after it had closed the desk -- a second
+    desk committing in the same moment holds git's `index.lock` (FACOWORK,
+    session-recap wave 4 paper walk, P-F9). With the record archived, the
+    ownership check and the save itself refuse "there is no desk record", and
+    the work sits unsaved with nothing to save it by. Restored, `desk_save.py`
+    simply runs again.
+    """
+    moves = [(src, dest) for src, dest in archived_moves(target) if src.exists()]
+    in_the_way = [dest.relative_to(REPO).as_posix() for _, dest in moves if dest.exists()]
+    if in_the_way:
+        raise DeskError(
+            f"cannot move the closed desk back from "
+            f"{target.relative_to(REPO).as_posix()}: {in_the_way} already exist "
+            f"(a desk opened since?). Nothing was moved"
+        )
+    for src, dest in moves:
+        os.replace(src, dest)
+    target.rmdir()
+
+
+def archive_desk(desk: str) -> Path:
+    """The move :func:`close_desk` makes; the folder it moved everything to."""
     record = require_record()
     require_the_desk(record, desk)
     open_lanes = [name for name, row in record["lanes"].items()
@@ -894,13 +1096,10 @@ def close_desk(desk: str) -> list[str]:
         )
     target = CLOSED_DIR / datetime.now().strftime("%Y-%m-%d_%H%M%S")
     target.mkdir(parents=True)
-    os.replace(RECORD, target / RECORD.name)
-    for folder in (DONE_DIR, REPO / COORDINATION / "task_sheets"):
-        if folder.exists():
-            os.replace(folder, target / folder.name)
-    if DESK_LOG.exists():
-        os.replace(DESK_LOG, target / DESK_LOG.name)
-    return [f"desk closed; its record is under {target.relative_to(REPO).as_posix()}"]
+    for archived, live in archived_moves(target):
+        if live.exists():
+            os.replace(live, archived)
+    return target
 
 
 # --- the command line -------------------------------------------------------
@@ -910,6 +1109,42 @@ def close_desk(desk: str) -> list[str]:
 #: is shown a lane stopped at a pop-up by the commands it runs anyway -- it does
 #: not have to remember to look (the 2026-09-19 rehearsal, finding 2).
 DESK_ACTS = ("open-desk", "stamp", "own", "disown", "outside", "route")
+
+
+def no_home_problem(inherit: bool) -> str | None:
+    """Why a NEW desk may not open here, or None. Every new desk names a home
+    (the docstring's DESKS SIDE BY SIDE); `coordination/` keeps only a record
+    left there from before homes, which may still be inherited."""
+    if HOME != COORDINATION or (inherit and RECORD.exists()):
+        return None
+    return (f"a new desk opens in a home of its own, so desks run side by side: "
+            f"`<venv python> scripts/desk_home.py <home> desk_record.py open-desk "
+            f"--desk <you> --job \"...\"`, <home> a short name for the job "
+            f"(lowercase letters, digits, dashes), and every later desk command "
+            f"through the same wrapper. Homes on file: "
+            f"{sorted(other_desks()) or 'none'}. Nothing was opened")
+
+
+def live_desk_problem(record: dict, actor: str) -> str | None:
+    """Why `actor` may not inherit `record`, or None. A desk whose window is
+    still live is not gone, and taking its record would leave two windows
+    each believing it is that desk. Best effort: an unreadable session list
+    lets the inherit through, as it always did."""
+    was = record.get("desk")
+    if not was or was == actor:
+        return None
+    try:
+        import open_terminal
+        live = [row for row in open_terminal.here(open_terminal.live_sessions())
+                if row.get("name") == was]
+        mine = open_terminal.own_ancestry() if live else set()
+    except Exception:  # noqa: BLE001 -- see the docstring
+        return None
+    if any(row.get("pid") not in mine for row in live):
+        return (f"desk {was!r} is live in this workspace, so it is not gone and "
+                f"{HOME}/ is not yours to inherit. A new job opens under a home "
+                f"name of its own. Nothing was changed")
+    return None
 
 
 def stall_banner() -> list[str]:
@@ -949,7 +1184,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = desk_act("route", "write the owner's ruling to disk, then name every lane it affects")
     sub.add_argument("paths", nargs="+")
     sub.add_argument("--ruling", required=True, help="the owner's words, word for word")
-    sub.add_argument("--log", help="the log to append to (default coordination/desk_log.md)")
+    sub.add_argument("--log", help="the log to append to (default desk_log.md in the desk's home)")
     sub = acts.add_parser("report-done", help="a lane records that its work is finished")
     sub.add_argument("lane")
     sub = acts.add_parser("show", help="the desk, its lanes, and what each owns")
@@ -964,6 +1199,12 @@ def main(argv: Sequence[str] = ()) -> int:
         if args.act == "open-desk":
             if not args.desk:
                 raise DeskError("pass --desk <your session name>")
+            require_home()
+            problem = no_home_problem(args.inherit)
+            if problem is None and args.inherit and (on_file := read_record()):
+                problem = live_desk_problem(on_file, args.desk)
+            if problem:
+                raise DeskError(problem)
             said = open_desk(args.desk, args.job, inherit=args.inherit)
         elif args.act == "stamp":
             said = stamp(args.desk, args.lane, args.sheet)
