@@ -31,10 +31,13 @@ to remember, in the only order that works:
      new document with no budget row, or one over its ceiling, stops the save
      the same way;
   2. `desk_record.py close-desk` -- the record, sheets and done files move under
-     `coordination/closed/<stamp>/`;
+     `closed/<stamp>/` in the desk's home;
   3. one commit, by path, of: every changed file a lane or the desk owns, plus
-     everything changed under `coordination/`. A path recorded as another
-     window's work (`desk_record.py outside`) is never in it;
+     everything changed in the desk's home (`coordination/desks/<home>/`). A
+     path recorded as another window's work (`desk_record.py outside`), or held
+     by another live desk, is never in it. A commit that fails -- another
+     desk committing in the same moment holds git's `index.lock` -- puts the
+     closed desk back, so the save simply runs again;
   4. `git push origin main`.
 
 This file is kit-owned: identical in every project the Starter Kit seeds, and
@@ -45,7 +48,8 @@ Exit codes:
     0 = saved and pushed (or, with --dry-run, the list was printed)
     1 = refused: a changed file without exactly one owner, a lane still open,
         or the document gate failing
-    2 = no desk record, not the desk, or git could not be read
+    2 = no desk record, not the desk, git could not be read, or the commit
+        failed (the closed desk is put back; run the save again)
     3 = the commit was made and the push FAILED -- say so to the owner in that turn
 """
 
@@ -119,6 +123,33 @@ def owned_changes(record: dict) -> tuple[list[str], list[str], list[str]]:
     return mine, failures, theirs
 
 
+def restore(target: Path, new: Sequence[str]) -> int:
+    """After a commit that FAILED: put the closed desk back, so the record is
+    live again and the save can simply run again. Exit 2 either way.
+
+    Closing comes before the commit (the archive is part of what is saved), so
+    a failed commit used to leave no record: the ownership check and this save
+    then refused "there is no desk record", and the work sat unsaved with
+    nothing to save it by (FACOWORK, P-F9). With desks side by side, two saves
+    in one moment make that failure ordinary. The `git add -N` marks made on
+    the archived files are taken back too, or the rerun would find them
+    pointing at files that moved away.
+    """
+    archived = target.relative_to(dr.REPO).as_posix()
+    marks = [p for p in new if dr.covers(archived, p)]
+    if marks:
+        git(dr.REPO, "reset", "-q", paths=marks)
+    try:
+        dr.reopen_archived(target)
+    except (dr.DeskError, OSError) as exc:
+        print(f"the record was NOT restored: {exc}. It is under {archived}; move "
+              f"it back to {dr.HOME}/ by hand, then run desk_save again",
+              file=sys.stderr)
+        return 2
+    print("record restored — run desk_save again", file=sys.stderr)
+    return 2
+
+
 def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -> int:
     record = dr.require_record()
     dr.require_the_desk(record, desk)
@@ -147,28 +178,37 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
         for path in mine:
             print(f"would save: {path}")
         print(f"DRY RUN - {len(mine)} path(s), plus whatever closing the desk moves "
-              f"under {dr.COORDINATION}/. Nothing was closed or saved.")
+              f"under {dr.HOME}/. Nothing was closed or saved.")
         return 0
 
-    for line in dr.close_desk(desk):
-        print(line)
+    target = dr.archive_desk(desk)
+    print(f"desk closed; its record is under {target.relative_to(dr.REPO).as_posix()}")
 
-    # Closing moved files under coordination/, so the list is taken again: what
-    # this desk owned and is still changed, plus everything under coordination/.
+    # Closing moved files within the desk's home, so the list is taken again:
+    # what this desk owned and is still changed, plus everything in its home
+    # that no other live desk holds (a desk left at `coordination/` has the
+    # homes of the desks under `coordination/desks/` inside its own).
     now = dr.git_changed()
-    paths = sorted({p for p in now if p in set(mine) or dr.covers(dr.COORDINATION, p)})
+    others = dr.other_desks()
+    paths = sorted({p for p in now if p in set(mine)
+                    or (dr.covers(dr.HOME, p) and dr.another_desks_claim(p, others) is None)})
     paths = [p for p in paths if p not in set(theirs)]
     if not paths:
         print("NOTHING TO SAVE - the desk is closed and no owned file changed.")
         return 0
     new = sorted(untracked(dr.REPO) & set(paths))
+    failed = None
     if new:
         proc = git(dr.REPO, "add", "-N", paths=new)
         if proc.returncode != 0:
-            raise dr.DeskError(f"`git add -N` failed: {said(proc)}")
-    proc = git(dr.REPO, "commit", "-m", message, paths=paths)
-    if proc.returncode != 0:
-        raise dr.DeskError(f"`git commit` failed, and nothing was saved: {said(proc)}")
+            failed = f"`git add -N` failed, and nothing was saved: {said(proc)}"
+    if failed is None:
+        proc = git(dr.REPO, "commit", "-m", message, paths=paths)
+        if proc.returncode != 0:
+            failed = f"`git commit` failed, and nothing was saved: {said(proc)}"
+    if failed is not None:
+        print(f"FAIL - {failed}", file=sys.stderr)
+        return restore(target, new)
     print(f"SAVED - {len(paths)} path(s) in one commit: {message}")
     if not push:
         return 0
