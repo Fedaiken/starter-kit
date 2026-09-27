@@ -13,12 +13,15 @@ caught HERE, at the end of the job, before anything is saved. The final check
 runs this, and the desk runs it again immediately before its one save; the job
 does not close while it fails.
 
-It reads `coordination/desk_record.json` (`scripts/desk_record.py`). A file
-that was already changed when the desk opened, and has not changed since, is
-nobody's lane and is left out -- the owner's tree is rarely clean. Everything
-under `coordination/` is the desk's own. A file another window changed WHILE
-the desk was open is recorded with `desk_record.py outside <path> --why ...`
-and is listed under its own heading: not a failure, and never staged.
+It reads the desk's record in its home (`scripts/desk_record.py`:
+`coordination/desks/<home>/`, run through `scripts/desk_home.py <home>`). A
+file that was already changed when the desk opened, and has not changed since,
+is nobody's lane and is left out -- the owner's tree is rarely clean.
+Everything in the desk's home is the desk's own. A file ANOTHER LIVE DESK
+holds -- its home, or a file one of its lanes owns -- is that desk's: listed
+under its own heading, never a failure, never staged. A file another window
+changed WHILE the desk was open is recorded with `desk_record.py outside
+<path> --why ...` and is listed the same way.
 
 On a pass it prints the changed files grouped by owner, which is also the list
 the desk's one save stages by path.
@@ -62,7 +65,16 @@ def findings(record: dict, changed: Sequence[str]) -> tuple[dict[str, list[str]]
     """
     by_owner: dict[str, list[str]] = {}
     failures: list[str] = []
+    others = dr.other_desks()
     for path in changed:
+        # Another live desk's file -- its home, or a file one of its lanes
+        # holds -- is that desk's to save, never a stray of this one (desks run
+        # side by side). Checked first: a desk left at `coordination/` owns
+        # that whole folder, the homes of other desks included.
+        theirs = dr.another_desks_claim(path, others)
+        if theirs is not None:
+            by_owner.setdefault(OUTSIDE, []).append(f"{path}  -- {theirs}")
+            continue
         owners = dr.owners_of(record, path)
         why = dr.outside_of(record, path)
         if not owners and why is not None:
