@@ -153,7 +153,7 @@ A lane's `outside: <file or entity>` line — something it found that is not in 
 
 ### Step 5 — Watch for the stall nobody can announce
 
-**A lane stopped at a pop-up cannot say so; you are shown it:** every act you perform — `open_terminal.py` opening, closing or listing, and every `desk_record.py` desk act — ends with a line `NEEDS THE OWNER -- the `<lane>` tab is stopped and waiting for the owner: <what>` for each lane stopped that way. **Tell the owner which tab, in the turn you see that line.** It names every stalled window here, another desk's lanes too. A lane that expects a pop-up sends `prompting: <command> — <what it touches>` first: relay that the moment it lands. Every opened window has Remote Control on (`--no-remote-control` turns it off), so the owner can answer from their phone. The full history:
+**A lane stopped at a pop-up cannot say so; you are shown it:** every act you perform — `open_terminal.py` opening, closing or listing, and every `desk_record.py` desk act — ends with a line `NEEDS THE OWNER -- the `<lane>` tab is stopped and waiting for the owner: <what>` for each lane stopped that way. **Tell the owner which tab, in the turn you see that line.** It names every stalled window here, another desk's lanes too. A lane that expects a pop-up sends `prompting: <command> — <what it touches>` first: relay that the moment it lands. Lanes open without Remote Control (`--remote-control` adds it); the desk keeps it on. The full history:
 
 ```
 <home run> note_prompt.py --report
