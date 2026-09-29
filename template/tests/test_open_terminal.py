@@ -54,6 +54,9 @@ def room(tmp_path, monkeypatch):
     monkeypatch.setattr(ot, "live_sessions", lambda: list(state["live"]))
     monkeypatch.setattr(ot, "own_ancestry", lambda: set())
     monkeypatch.setattr(ot, "launch", lambda command: state["launched"].append(command))
+    # The suite runs inside a desk's or a lane's window, which carries its desk
+    # home in the environment; an open here must not inherit that.
+    monkeypatch.delenv(pi.DESK_HOME_ENV, raising=False)
     # A Windows Terminal machine unless a test says otherwise, so the open's
     # output does not depend on which machine runs the suite.
     monkeypatch.setattr(ot, "launch_mode", lambda: ot.OPENED_BY_WT)
@@ -328,7 +331,6 @@ def test_the_window_is_a_named_coloured_tab_with_the_model_written_out(room):
     window = ot.window_for("lane", "lane-alpha", "sheet.md", "opus", resume=False)
     assert window.argv == (
         "claude", "--model", "opus", "--permission-mode", "acceptEdits",
-        "--remote-control", "lane-alpha",
         "--name", "lane-alpha", "/lane lane-alpha sheet.md")
     assert window.window_target == ot.SHARED_WINDOW
     assert window.tab_title == "lane-alpha"
@@ -941,10 +943,12 @@ def by_hand(room, monkeypatch):
     return room
 
 
-def expected_posix_line(name, task, model="opus"):
+def expected_posix_line(name, task, model="opus", remote_control=False):
+    """A lane's line: with no Remote Control unless the open asked for it."""
+    rc_words = f"--remote-control {name} " if remote_control else ""
     return (f"cd '{REPO}' && {pi.ROLE_ENV}=lane {pi.WINDOW_ENV}={name} "
             f"claude --model {model} --permission-mode acceptEdits "
-            f"--remote-control {name} --name {name} '/lane {name} {task}'")
+            f"{rc_words}--name {name} '/lane {name} {task}'")
 
 
 def test_a_manual_open_prints_the_line_and_records_it_as_manual(by_hand, capsys):
@@ -1012,10 +1016,15 @@ def test_the_manual_reason_says_which_case_it_is(os_name, said):
     assert said in ot.manual_reason(os_name)
 
 
-# --- every window starts with Remote Control on (owner's ruling, 2026-09-26) ----
+# --- a desk opens with Remote Control on, a lane without it -------------------
+# The owner's rulings: 2026-09-26 put it on every window; 2026-09-28, "stop
+# opening every lane in /rc please", took it off lanes only.
 
 
 DESK = ["--role", "desk", "--name", "desk", "--model", "fable", "--fable-approved-by-owner"]
+
+#: A lane opened WITH Remote Control: the flag is what puts it back.
+LANE_RC = [*LANE, "--reason", OPUS_JOB, "--remote-control"]
 
 
 def rc(name):
@@ -1036,8 +1045,35 @@ def printed_manual_line(out, os_name):
     return next(l.strip() for l in out.splitlines() if l.strip().startswith(start))
 
 
+def test_a_lanes_default_argv_has_no_remote_control(room):
+    """The 2026-09-28 ruling, at the argv and at the real open."""
+    argv = ot.window_for("lane", "lane-alpha", "sheet.md", "opus", resume=False).argv
+    assert "--remote-control" not in argv
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert "--remote-control" not in launched_statement(room)
+    assert record()[-1]["remote_control"] is False
+
+
+def test_the_remote_control_flag_puts_it_back_for_a_lane(room):
+    argv = ot.window_for("lane", "lane-alpha", "sheet.md", "opus", resume=False,
+                         remote_control=True).argv
+    assert argv[argv.index("--remote-control") + 1] == rc("lane-alpha")
+    assert ot.main(LANE_RC) == 0
+    assert f"'--remote-control' '{rc('lane-alpha')}' '--name' 'lane-alpha'" in (
+        launched_statement(room))
+    assert record()[-1]["remote_control"] is True
+
+
+def test_a_desks_default_argv_has_remote_control(room):
+    argv = ot.window_for("desk", "desk", None, "fable", resume=False).argv
+    assert argv[argv.index("--remote-control") + 1] == rc("desk")
+    assert ot.main(DESK) == 0
+    assert f"'--remote-control' '{rc('desk')}' '--name' 'desk'" in launched_statement(room)
+    assert record()[-1]["remote_control"] is True
+
+
 @pytest.mark.parametrize("argv, name", [
-    ([*LANE, "--reason", OPUS_JOB], "lane-alpha"),
+    (LANE_RC, "lane-alpha"),
     (DESK, "desk"),
 ])
 def test_a_tab_open_carries_remote_control_named_for_the_window(room, argv, name):
@@ -1049,7 +1085,7 @@ def test_a_tab_open_carries_remote_control_named_for_the_window(room, argv, name
 
 @pytest.mark.parametrize("os_name", ["posix", "nt"])
 @pytest.mark.parametrize("argv, name", [
-    ([*LANE, "--reason", OPUS_JOB], "lane-alpha"),
+    (LANE_RC, "lane-alpha"),
     (DESK, "desk"),
 ])
 def test_the_open_by_hand_line_carries_remote_control(room, monkeypatch, capsys,
@@ -1070,7 +1106,8 @@ def test_the_open_by_hand_line_carries_remote_control(room, monkeypatch, capsys,
 def test_the_name_always_follows_the_flag_so_nothing_else_is_taken_for_it(room):
     """The CLI's value is optional: a bare flag would take the next word."""
     for role, task in (("lane", "sheet.md"), ("desk", None)):
-        argv = ot.window_for(role, "w1", task, "opus", resume=False).argv
+        argv = ot.window_for(role, "w1", task, "opus", resume=False,
+                             remote_control=True).argv
         assert argv[argv.index("--remote-control") + 1] == rc("w1")
 
 
@@ -1079,45 +1116,92 @@ def test_the_remote_control_name_is_exactly_the_messaging_name(room):
     unmeasured. With the two strings identical, whichever sets the name, the
     desk and its lanes still message, close and refuse by the window name."""
     for role, task in (("lane", "sheet.md"), ("desk", None)):
-        argv = ot.window_for(role, "w1", task, "opus", resume=False).argv
+        argv = ot.window_for(role, "w1", task, "opus", resume=False,
+                             remote_control=True).argv
         assert argv[argv.index("--name") + 1] == "w1"
         assert argv[argv.index("--remote-control") + 1] == "w1"
-    argv = ot.window_for("lane", "w1", None, "opus", resume=True).argv
+    argv = ot.window_for("lane", "w1", None, "opus", resume=True,
+                         remote_control=True).argv
     assert argv[argv.index("--remote-control") + 1] == argv[argv.index("--resume") + 1]
     assert dict(ot.window_for("lane", "w1", "s.md", "opus", resume=False).env)[
         pi.WINDOW_ENV] == "w1"
 
 
-def test_a_resumed_window_keeps_remote_control(room):
-    argv = ot.window_for("lane", "lane-alpha", None, "opus", resume=True).argv
-    assert argv[argv.index("--remote-control") + 1] == rc("lane-alpha")
-    assert argv[-2:] == ("--resume", "lane-alpha")
+def test_a_resume_follows_the_same_rule_by_role(room):
+    """A lane resumes without Remote Control unless asked; a desk with it."""
+    lane = ot.window_for("lane", "lane-alpha", None, "opus", resume=True).argv
+    assert "--remote-control" not in lane
+    assert lane[-2:] == ("--resume", "lane-alpha")
+    lane_rc = ot.window_for("lane", "lane-alpha", None, "opus", resume=True,
+                            remote_control=True).argv
+    assert lane_rc[lane_rc.index("--remote-control") + 1] == rc("lane-alpha")
+    assert lane_rc[-2:] == ("--resume", "lane-alpha")
+    desk = ot.window_for("desk", "desk", None, "fable", resume=True).argv
+    assert desk[desk.index("--remote-control") + 1] == rc("desk")
+    assert desk[-2:] == ("--resume", "desk")
+    desk_off = ot.window_for("desk", "desk", None, "fable", resume=True,
+                             remote_control=False).argv
+    assert "--remote-control" not in desk_off
 
 
-def test_no_remote_control_turns_it_off_on_both_paths(room, monkeypatch, capsys):
-    assert ot.main([*LANE, "--reason", OPUS_JOB, "--no-remote-control"]) == 0
+@pytest.mark.parametrize("role, asked, on", [
+    ("lane", None, False), ("lane", True, True), ("lane", False, False),
+    ("desk", None, True), ("desk", True, True), ("desk", False, False),
+])
+def test_the_default_is_by_role_and_the_command_line_overrides_it(role, asked, on):
+    assert ot.wants_remote_control(role, asked) is on
+
+
+def test_no_remote_control_turns_it_off_for_a_desk_on_both_paths(room, monkeypatch, capsys):
+    assert ot.main([*DESK, "--no-remote-control"]) == 0
     assert "--remote-control" not in launched_statement(room)
     assert record()[-1]["remote_control"] is False
     monkeypatch.setattr(ot, "launch_mode", lambda: ot.OPENED_BY_MANUAL)
     monkeypatch.setattr(ot, "manual_line",
                         lambda window, cwd: wt.manual_line(window, cwd=cwd, os_name="posix"))
-    assert ot.main(["--role", "lane", "--name", "lane-beta", "--task", "x",
-                    "--reason", OPUS_JOB, "--no-remote-control"]) == 0
+    assert ot.main(["--role", "desk", "--name", "desk-beta", "--model", "fable",
+                    "--fable-approved-by-owner", "--no-remote-control"]) == 0
     assert "--remote-control" not in printed_manual_line(capsys.readouterr().out, "posix")
     assert record()[-1]["remote_control"] is False
+
+
+def test_no_remote_control_on_a_lane_is_accepted_and_changes_nothing(room):
+    assert ot.main([*LANE, "--reason", OPUS_JOB, "--no-remote-control"]) == 0
+    assert "--remote-control" not in launched_statement(room)
+    assert record()[-1]["remote_control"] is False
+
+
+def test_asking_for_both_is_refused_rather_than_letting_the_last_one_win(room, capsys):
+    with pytest.raises(SystemExit) as refusal:
+        ot.main([*LANE, "--reason", OPUS_JOB, "--remote-control", "--no-remote-control"])
+    assert refusal.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err
+    assert room["launched"] == [] and not ot.RECORD.exists()
 
 
 def test_a_dry_run_says_whether_remote_control_is_on(room, capsys):
     """The `wt.exe` line hides the argv in an encoded blob, so it is said."""
     assert ot.main([*LANE, "--reason", OPUS_JOB, "--dry-run"]) == 0
+    assert ("remote control: off (a lane's default; --remote-control turns it on)"
+            in capsys.readouterr().out)
+    assert ot.main([*LANE, "--reason", OPUS_JOB, "--dry-run", "--remote-control"]) == 0
     assert f"remote control: {rc('lane-alpha')}" in capsys.readouterr().out
     assert ot.main([*LANE, "--reason", OPUS_JOB, "--dry-run", "--no-remote-control"]) == 0
     assert "remote control: off (--no-remote-control)" in capsys.readouterr().out
+    assert ot.main([*DESK, "--dry-run"]) == 0
+    assert f"remote control: {rc('desk')}" in capsys.readouterr().out
+    assert ot.main([*DESK, "--dry-run", "--no-remote-control"]) == 0
+    assert "remote control: off (--no-remote-control)" in capsys.readouterr().out
 
 
-def test_the_docstring_documents_the_off_switch():
+def test_the_docstring_states_the_rule_and_cites_both_rulings():
+    """The header is where the next reader learns why a lane has no Remote
+    Control: both flags, both dates, and the owner's words word for word."""
     assert ot.NO_REMOTE_CONTROL_FLAG in ot.__doc__
+    assert ot.REMOTE_CONTROL_FLAG in ot.__doc__
     assert "REMOTE CONTROL" in ot.__doc__
+    assert "2026-09-26" in ot.__doc__ and "2026-09-28" in ot.__doc__
+    assert "stop opening every lane in /rc please" in ot.__doc__
 
 
 # --- closing, per machine -------------------------------------------------------
