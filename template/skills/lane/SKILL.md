@@ -60,6 +60,8 @@ Every path under `reads:` is read **in full before the first judgment or edit** 
 - **PII stays in `_private/`.** No identity numbers, birth dates, account details or ID scans in any file a lane writes outside a gitignored `_private/` folder.
 - **A drafting lane serves nothing.** A letter or document is a draft for the owner to review; it is sent, filed or served only by them, after they have read it.
 
+**A sheet whose reason is `research` or `planning` runs `skills/research/SKILL.md` for the research in its unit, when this project has one** — read it in full after the sheet's `reads:`. Its write-up goes to `Working/<name>/research.md`, and at Step 5 its check, `<venv python> scripts/check_research.py Working/<name>/research.md`, adds one `$` block after the sheet's own.
+
 Send the desk these lines, and only these — **each one line**, carrying the finding rather than the narrative:
 
 | Line | When |
