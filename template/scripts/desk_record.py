@@ -7,7 +7,7 @@ on Windows and `.venv/bin/python` elsewhere -- `project_identity.venv_python`):
     <venv python> scripts/desk_record.py stamp copy-march coordination/desks/statements/task_sheets/copy-march.md --desk the-desk
     <venv python> scripts/desk_record.py own copy-march records/2025/March.md --desk the-desk
     <venv python> scripts/desk_record.py disown copy-march records/2025/March.md --desk the-desk
-    <venv python> scripts/desk_record.py route records/2025/March.md --ruling "the March deposit was a refund, not income" --desk the-desk
+    <venv python> scripts/desk_record.py route records/2025/March.md --ruling "the March deposit was a refund, not income" --asked "unprompted" --desk the-desk
     <venv python> scripts/desk_record.py report-done copy-march
     <venv python> scripts/desk_record.py show
     <venv python> scripts/desk_record.py show copy-march
@@ -969,18 +969,29 @@ def outside(desk: str, paths: Sequence[str], why: str) -> list[str]:
         "  the ownership check passes these and the save does not stage them"]
 
 
-def route(desk: str, paths: Sequence[str], ruling: str, log: str | None) -> list[str]:
-    """The owner's ruling to disk, THEN to every lane it affects (R18, then R6)."""
+def route(desk: str, paths: Sequence[str], ruling: str, log: str | None,
+          asked: str | None = None) -> list[str]:
+    """The owner's ruling to disk, THEN to every lane it affects (R18, then R6).
+
+    `asked` is the question the ruling answers ("unprompted" when none): a bare
+    "1" or "yes" means nothing to a lane without it."""
     record = require_record()
     require_the_desk(record, desk)
     if not ruling.strip():
         raise DeskError("--ruling carries the owner's words, word for word; it cannot be empty")
+    if asked is not None and not asked.strip():
+        raise DeskError("--asked carries the question the ruling answers, or 'unprompted'; "
+                        "it cannot be empty")
+    context = ""
+    if asked and asked.strip().lower() != "unprompted":
+        context = f" (answering: {asked.strip()})"
     cleaned = [clean_path(p) for p in paths]
     log_path = DESK_LOG if log is None else REPO / clean_path(log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(f"\n## Ruling, {now_iso()}\n\n> {ruling.strip()}\n\n"
-                     f"Affects: {', '.join(cleaned)}\n")
+                     + (f"Answering: {asked.strip()}\n\n" if asked else "")
+                     + f"Affects: {', '.join(cleaned)}\n")
     affected = sorted({
         lane for path in cleaned for lane, row in record["lanes"].items()
         if lane != DESK_LANE and any(overlap(owned, path) for owned in row.get("owns", []))
@@ -994,7 +1005,7 @@ def route(desk: str, paths: Sequence[str], ruling: str, log: str | None) -> list
             continue
         row["working_since"] = working_since_now(lane)
         row["working_since_iso"] = now_iso()
-        said.append(f"  send to {lane}: [desk] correction: {ruling.strip()} "
+        said.append(f"  send to {lane}: [desk] correction: {ruling.strip()}{context} "
                     f"-- affects: {', '.join(cleaned)}")
     if not affected:
         said.append("  no lane owns an affected path; nothing to send")
@@ -1184,6 +1195,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = desk_act("route", "write the owner's ruling to disk, then name every lane it affects")
     sub.add_argument("paths", nargs="+")
     sub.add_argument("--ruling", required=True, help="the owner's words, word for word")
+    sub.add_argument("--asked", required=True,
+                     help="the question the ruling answers, as put to the owner, or 'unprompted'")
     sub.add_argument("--log", help="the log to append to (default desk_log.md in the desk's home)")
     sub = acts.add_parser("report-done", help="a lane records that its work is finished")
     sub.add_argument("lane")
@@ -1213,7 +1226,7 @@ def main(argv: Sequence[str] = ()) -> int:
         elif args.act == "outside":
             said = outside(args.desk, args.paths, args.why)
         elif args.act == "route":
-            said = route(args.desk, args.paths, args.ruling, args.log)
+            said = route(args.desk, args.paths, args.ruling, args.log, args.asked)
         elif args.act == "report-done":
             said = report_done(args.lane)
         elif args.act == "show":
