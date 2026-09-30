@@ -63,6 +63,8 @@ Two rows are in every project: `prescribed` (Sonnet: build work the sheet names 
 
 Refused at the stamp: more than one unit (a second unit is a second sheet and a second lane; a comma, semicolon, `+`, `&` or "and" joins two, but not inside parentheses, and a ` — ` dash is a gloss on the one unit); no `owns:`; a `done:` that names no runnable command; a `done:` that runs the whole test suite (name the lane's own test files); a sheet whose reason reads a source but whose `reads:` names only files under `kb/`; a `reads:` path that is not on disk; any path outside the project; any path another live lane — of this desk or another — owns, or that sits inside or above one.
 
+A `research` or `planning` sheet owns `Working/<name>` for the research write-up (`skills/research/SKILL.md`, when this project has one).
+
 **Size the `reads:` list before stamping** — one lane's full read has a ceiling, and the stamp does not measure it yet. The measured numbers and how to split: `kb/lane-context-sizing.md`.
 
 **A `done:` for work that touches a `.md` or `.html` includes `python scripts/check_docs.py`.** A new document needs a row in `doc_budgets.yaml`, which the lane cannot write unless it owns that file — so the desk either gives `doc_budgets.yaml` to exactly one lane, or writes no sheet that creates a document.
