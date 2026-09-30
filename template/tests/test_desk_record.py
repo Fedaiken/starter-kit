@@ -460,6 +460,32 @@ def test_a_route_with_no_ruling_is_refused_and_nothing_is_written(desk):
     assert not dr.DESK_LOG.exists()
 
 
+def test_a_ruling_carries_the_question_it_answers_to_the_log_and_the_lane(desk):
+    """A bare "1" means nothing to a lane without the question it answered."""
+    said = dr.route(DESK, ["records/2025/January"], "1", None,
+                    asked="keep the deposit line — 1 yes, 2 no?")
+    assert "Answering: keep the deposit line" in dr.DESK_LOG.read_text(encoding="utf-8")
+    sends = [line for line in said if "send to" in line]
+    assert sends and all("correction: 1 (answering: keep the deposit line" in line
+                         for line in sends)
+
+
+def test_an_unprompted_ruling_adds_no_question_to_the_lane_line(desk):
+    said = dr.route(DESK, ["records/2025/January"], "strike it", None, asked="unprompted")
+    assert all("(answering:" not in line for line in said)
+
+
+def test_an_empty_question_is_refused_and_nothing_is_written(desk):
+    with pytest.raises(dr.DeskError):
+        dr.route(DESK, ["records/2025/January"], "1", None, asked="  ")
+    assert not dr.DESK_LOG.exists()
+
+
+def test_the_route_act_requires_asked_on_the_command_line():
+    with pytest.raises(SystemExit):
+        dr.build_parser().parse_args(["route", "records/2025", "--ruling", "1", "--desk", DESK])
+
+
 def test_done_counts_only_if_said_after_the_lane_was_last_put_to_work(desk):
     row = lambda: dr.read_record()["lanes"]["lane-alpha"]  # noqa: E731
     assert dr.lane_state(row(), "lane-alpha") == "working"
