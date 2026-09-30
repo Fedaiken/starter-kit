@@ -311,7 +311,9 @@ def test_the_tracked_settings_wire_the_guard_to_this_machines_shells():
     venv interpreter -- the values come from `project_identity`, not literals."""
     repo = Path(__file__).resolve().parent.parent
     settings = json.loads((repo / ".claude" / "settings.json").read_text(encoding="utf-8"))
-    (entry,) = settings["hooks"]["PreToolUse"]
+    # A project may add PreToolUse hooks for other tools; the guard's is the shell one.
+    (entry,) = [e for e in settings["hooks"]["PreToolUse"]
+                if any("lane_guard.py" in a for h in e["hooks"] for a in h.get("args", []))]
     assert set(entry["matcher"].split("|")) == set(pi.shell_tools())
     (hook,) = entry["hooks"]
     assert hook["args"] == ["${CLAUDE_PROJECT_DIR}/scripts/lane_guard.py"]
