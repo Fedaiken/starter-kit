@@ -137,7 +137,7 @@ A change to who owns what is **an act on the record, never a sentence in a messa
 When the owner rules — here or through a lane — **one command writes their words to disk and names every lane they affect**:
 
 ```
-<home run> desk_record.py route <affected paths> --ruling "<the owner's words, word for word>" --desk <you>
+<home run> desk_record.py route <affected paths> --ruling "<the owner's words, word for word>" --asked "<the question they answer, or unprompted>" --desk <you>
 ```
 
 It appends the ruling to the log **before** anything else, puts every lane that owns an affected path back to work, and prints the exact `[desk] correction:` line for each. Send those lines as printed. Name the affected paths generously (a folder reaches every lane with files inside it).
