@@ -44,6 +44,10 @@ The owner does not run git. Claude does, every time, without being asked — and
 
 `.gitattributes` normalizes text to LF in the index and declares PDFs, Office files, and images binary, so git never rewrites a signed PDF. On Windows `core.autocrlf` is on and the "LF will be replaced by CRLF" warnings are noise. The document gate measures bytes as checked out with CRLF endings on every OS, so its verdict is the same everywhere.
 
+## The gate decides a commit by its exit code
+
+Sat 2026-10-03: `check_docs.py 2>&1 | tail -2 && git commit …` committed and pushed a route file 102 b over budget; the pipe's exit code was `tail`'s, and the FAIL line fell outside the two lines shown. Fixed the next commit. The commit runs only on the gate's own exit code: `check_docs.py > f 2>&1 || { cat f; exit 1; }`. Open, not built: a git `pre-commit` hook that runs the gate, so a failing tree cannot commit from any window.
+
 ## Archive before a structural edit
 
 Before restructuring `CLAUDE.md`, `doc_budgets.yaml`, `.gitignore`, or `settings.json`, copy the file to `Archive/<name>_<YYYY-MM-DD>_pre-<change>.<ext>`. Git has the history, but the owner can open a file in `Archive/`; a commit takes git to read.
