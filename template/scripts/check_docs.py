@@ -60,6 +60,24 @@ THE CHECKS
 6. SETUP. No document holds a `{{FILL:` or `{{KIT:` marker. The Starter Kit
    seeds a project with these where the setup interview's answers go; one left
    behind is a section nobody wrote that reads as if someone had.
+7. TRIPS. Each `Trips/<trip>/` folder (not `_private`), on the files it has:
+   `itinerary.md` rows under a `## Ddd YYYY-MM-DD` day heading carry a Where
+   (start) and a How cell (`TBD` passes, listed as "not ready"; `not on file`
+   in Where fails) and a Status of `Plan` or `Booked · record: <section>`,
+   optionally ` · checked: <when>`; each day has exactly one `Wear:` line;
+   every `Booked · record:` section is a `## ` heading in `record.md`;
+   `record.md` holds no `Plan` row and no `Plan (not booked)`; a line in
+   record, itinerary or decisions quoting 3+ words carries a speaker or
+   source tag; each `Trips/Trip_Log.md` Next deadline cell is at most 300
+   characters; a `route: <file>.md` How cell names a file in the folder with a
+   `## Google Maps` section of maps/dir links, each carrying every place's id
+   (`scripts/maps.py link`), none starting at a stop no earlier leg reached;
+   a ride row (What starts `Ride`, `Walk back` or `Back to`) carries its ride
+   time as `N min`, so the calendar can end it on arrival. Added 2026-10-03 with the three-file trip layout
+   (`Outbox/data-structure-plan.html`): a walk sat on the plan for a week
+   with no start point, a quote with no speaker on file was put in a
+   companion's mouth, and the Trip Log's deadline cell had grown to 1,009
+   characters of history.
 
 There is no --fix. Deciding which paragraph is rationale that belongs in a
 docstring, which fact belongs in kb/, and which narrative git already holds is
@@ -571,6 +589,245 @@ def check_setup(files: list[str]) -> list[str]:
     return failures
 
 
+# --- trips -------------------------------------------------------------------
+
+TRIPS_DIR = "Trips"
+TRIP_LOG = "Trips/Trip_Log.md"
+TRIP_LOG_DEADLINE_CAP = 300
+QUOTE_TAGS = ("said by", "reported by", "speaker not on file", "http", "source:")
+QUOTED_FILES = ("record.md", "itinerary.md", "decisions.md")
+_DAY_HEADING = re.compile(r"^## (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2}\s*$")
+_ITIN_STATUS = re.compile(
+    r"^(?:Plan|Booked · record: (?P<section>.+?))"
+    r"(?: · checked: (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{1,2}:\d{2} [ap]m)?$"
+)
+_QUOTE_SPAN = re.compile(r'"([^"]*)"|“([^”]*)”')
+_TBD = re.compile(r"\bTBD\b")
+_RIDE = re.compile(r"(?:Ride|Walk back|Back to)\b")
+_MINUTES = re.compile(r"\b\d+ min\b")
+
+
+def _tables(lines: list[str]):
+    """(line number, header cells, row cells) for every body row of every `|` table."""
+    header: list[str] | None = None
+    for n, line in enumerate(lines, start=1):
+        if not line.lstrip().startswith("|"):
+            header = None
+            continue
+        cells = _table_cells(line)
+        if header is None:
+            header = cells
+            continue
+        if all(set(c) <= set("-: ") for c in cells):
+            continue
+        yield n, header, cells
+
+
+def check_itinerary_text(rel: str, text: str) -> tuple[list[str], list[str], list[tuple[int, str]]]:
+    """(failures, not-ready notes, (line, section) for every Booked row)."""
+    failures: list[str] = []
+    notes: list[str] = []
+    booked: list[tuple[int, str]] = []
+    lines = text.replace("\r\n", "\n").split("\n")
+    days: list[tuple[int, int, int]] = []  # (heading line, first line, last line), 1-based inclusive
+    start = None
+    for n, line in enumerate(lines, start=1):
+        if re.match(r"#{1,2} ", line):
+            if start is not None:
+                days.append((start, start + 1, n - 1))
+                start = None
+            if _DAY_HEADING.match(line):
+                start = n
+    if start is not None:
+        days.append((start, start + 1, len(lines)))
+    for head, first, last in days:
+        day = lines[head - 1][3:].strip()
+        wear = sum(1 for ln in lines[first - 1:last] if ln.lstrip().startswith("Wear:"))
+        if wear != 1:
+            failures.append(f"{rel}:{head}: {day} has {wear} `Wear:` lines; a day has exactly one (`Wear: not set` passes).")
+        bad_header = None
+        for offset, header, cells in _tables(lines[first - 1:last]):
+            n = first - 1 + offset
+            missing = [c for c in ("Where (start)", "How", "Status") if c not in header]
+            if missing:
+                if header is not bad_header:
+                    failures.append(f"{rel}:{n}: {day} table has no {', '.join(missing)} column; the header is `| Time | What | Where (start) | How | Status |`.")
+                bad_header = header
+                continue
+            if len(cells) != len(header):
+                failures.append(f"{rel}:{n}: row has {len(cells)} cells, the header has {len(header)}.")
+                continue
+            where, how, status = (cells[header.index(c)] for c in ("Where (start)", "How", "Status"))
+            what = cells[header.index("What")] if "What" in header else "row"
+            problems = []
+            if not where:
+                problems.append("Where (start) is empty")
+            elif where.lower() == "not on file":
+                problems.append("Where (start) says `not on file`; an item with no start point is `TBD`")
+            if not how:
+                problems.append("How is empty")
+            elif _RIDE.match(what) and not _MINUTES.search(f"{what} {how}") and not _TBD.search(how):
+                problems.append("a ride row carries its ride time as `N min` in What or How (`TBD` in How passes, not ready); the calendar ends the ride on arrival from it")
+            m = _ITIN_STATUS.match(status)
+            if not m:
+                problems.append(f"Status `{status}` is neither `Plan` nor `Booked · record: <record.md section>` (a ` · checked: Ddd YYYY-MM-DD h:mm am` may follow)")
+            elif m.group("section"):
+                booked.append((n, m.group("section").strip()))
+            if problems:
+                failures.append(f"{rel}:{n}: {what}: {'; '.join(problems)}.")
+            elif _TBD.search(where) or _TBD.search(how):
+                notes.append(f"not ready: {rel}:{n}: {day} {what} (TBD in {' and '.join(c for c, v in (('Where', where), ('How', how)) if _TBD.search(v))})")
+    return failures, notes, booked
+
+
+def check_record_text(rel: str, text: str) -> list[str]:
+    """A record holds booked facts only: no `Plan` Status row, no `Plan (not booked)`."""
+    failures: list[str] = []
+    lines = text.replace("\r\n", "\n").split("\n")
+    for n, line in enumerate(lines, start=1):
+        if "Plan (not booked)" in line:
+            failures.append(f"{rel}:{n}: `Plan (not booked)` in the record; a plan line goes to itinerary.md.")
+    for n, header, cells in _tables(lines):
+        if "Status" in header and len(cells) == len(header):
+            status = cells[header.index("Status")]
+            if re.match(r"^\*{0,2}Plan\b(?! \(not booked\))", status):
+                failures.append(f"{rel}:{n}: row with Status `{status}` in the record; a plan line goes to itinerary.md.")
+    return failures
+
+
+def record_sections(text: str) -> set[str]:
+    return {ln[3:].strip() for ln in text.replace("\r\n", "\n").split("\n") if ln.startswith("## ")}
+
+
+def check_booked_sections(itin_rel: str, booked: list[tuple[int, str]], record_rel: str, record_text: str | None) -> list[str]:
+    """Each `Booked · record: <section>` names a `## <section>` heading in the trip's record.md."""
+    sections = record_sections(record_text) if record_text is not None else set()
+    out = []
+    for n, section in booked:
+        if record_text is None:
+            out.append(f"{itin_rel}:{n}: `Booked · record: {section}`, but {record_rel} does not exist.")
+        elif section not in sections:
+            out.append(f"{itin_rel}:{n}: `Booked · record: {section}` names no `## {section}` heading in {record_rel}.")
+    return out
+
+
+def check_quotes_text(rel: str, text: str) -> list[str]:
+    """A line quoting 3+ words carries a speaker or a source (`QUOTE_TAGS`). Fenced code is skipped."""
+    failures: list[str] = []
+    fenced = False
+    for n, line in enumerate(text.replace("\r\n", "\n").split("\n"), start=1):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        spans = [a or b for a, b in _QUOTE_SPAN.findall(line)]
+        long = [s for s in spans if len(s.split()) >= 3]
+        if long and not any(tag in line.lower() for tag in QUOTE_TAGS):
+            failures.append(f"{rel}:{n}: quotes \"{long[0][:60]}\" with no speaker or source; add (said by <name>, <date>), (reported by …), (speaker not on file), source: or the URL.")
+    return failures
+
+
+def check_trip_log_text(text: str) -> list[str]:
+    """Each Next deadline cell is one deadline: at most `TRIP_LOG_DEADLINE_CAP` characters."""
+    failures: list[str] = []
+    checked = 0
+    for n, header, cells in _tables(text.replace("\r\n", "\n").split("\n")):
+        if "Next deadline" not in header:
+            continue
+        checked += 1
+        if len(cells) != len(header):
+            failures.append(f"{TRIP_LOG}:{n}: row has {len(cells)} cells, the header has {len(header)}.")
+            continue
+        cell = cells[header.index("Next deadline")]
+        if len(cell) > TRIP_LOG_DEADLINE_CAP:
+            trip = cells[header.index("Trip")] if "Trip" in header else f"line {n}"
+            failures.append(f"{TRIP_LOG}:{n}: {trip}: Next deadline cell is {len(cell):,} characters, over {TRIP_LOG_DEADLINE_CAP}. One deadline here; the history goes to the trip's decisions.md.")
+    if not checked:
+        failures.append(f"{TRIP_LOG}: no table with a `Next deadline` column found, so no cell was checked.")
+    return failures
+
+
+_ROUTE_CELL = re.compile(r"route:\s*`?([\w.-]+\.md)`?")
+_MAPS_DIR = re.compile(r"https://www\.google\.com/maps/dir/\?\S+")
+_STOP_ADDR = re.compile(r"([\d\s·,]*\d)\s+([A-Za-z]+)")
+
+
+def _place_key(text: str, anywhere: bool = False) -> set[tuple[str, str]]:
+    """(house number, street word) pairs in an address: `3017 · 3029 Magazine St` gives two.
+    `anywhere` finds the address after a business name (`Empire Antiques, 3617 Magazine St`)."""
+    m = (_STOP_ADDR.search if anywhere else _STOP_ADDR.match)(text.strip())
+    return {(n, m.group(2).lower()) for n in re.findall(r"\d+", m.group(1))} if m else set()
+
+
+def check_route_text(rel: str, text: str) -> list[str]:
+    """A walk's route file holds its Google Maps links, and no leg starts at a stop it never reached.
+
+    Sat 2026-10-03: the Magazine St link went only into the calendar and began at
+    stop 1, the book shop, so Maps walked past it."""
+    from urllib.parse import parse_qs, urlparse
+    links = _MAPS_DIR.findall(text)
+    if "## Google Maps" not in text or not links:
+        return [f"{rel}: a walk's route file has a `## Google Maps` section with its google.com/maps/dir links; the calendar copies them from here."]
+    stops: set[tuple[str, str]] = set()
+    for _, header, cells in _tables(text.replace("\r\n", "\n").split("\n")):
+        if "Address" in header and len(cells) == len(header):
+            stops |= _place_key(cells[header.index("Address")])
+    failures, reached = [], set()
+    for link in links:
+        q = parse_qs(urlparse(link).query)
+        stops_in = q.get("waypoints", [""])[0].split("|") if q.get("waypoints") else []
+        ids_in = q.get("waypoint_place_ids", [""])[0].split("|") if q.get("waypoint_place_ids") else []
+        if not (q.get("origin_place_id") and q.get("destination_place_id")) or len(ids_in) != len(stops_in):
+            failures.append(f"{rel}: a Maps leg without every place's id pins street addresses, not the businesses; build it with `scripts/maps.py link` ({link[:90]}…).")
+        start = _place_key(q.get("origin", [""])[0], anywhere=True)
+        if start & stops and not start & reached:
+            failures.append(f"{rel}: a Maps leg starts at a stop no earlier leg reached ({q['origin'][0]}); Maps never stops at an origin. Start where the travelers are and make the stop a waypoint.")
+        for p in stops_in + q.get("destination", [""]):
+            reached |= _place_key(p, anywhere=True)
+    return failures
+
+
+def check_trip_folder(folder: Path, rel_folder: str) -> tuple[list[str], list[str]]:
+    """(failures, notes) for one trip folder; each check runs only on the files it has."""
+    def read(name: str) -> str | None:
+        p = folder / name
+        return p.read_text(encoding="utf-8") if p.is_file() else None
+
+    failures: list[str] = []
+    notes: list[str] = []
+    record = read("record.md")
+    itinerary = read("itinerary.md")
+    if itinerary is not None:
+        f, notes, booked = check_itinerary_text(f"{rel_folder}/itinerary.md", itinerary)
+        failures += f + check_booked_sections(f"{rel_folder}/itinerary.md", booked, f"{rel_folder}/record.md", record)
+        for name in sorted(set(_ROUTE_CELL.findall(itinerary))):
+            text = read(name)
+            failures += check_route_text(f"{rel_folder}/{name}", text) if text is not None else [f"{rel_folder}/itinerary.md: a How cell names `route: {name}`, which is not in the folder."]
+    if record is not None:
+        failures += check_record_text(f"{rel_folder}/record.md", record)
+    for name in QUOTED_FILES:
+        text = read(name)
+        if text is not None:
+            failures += check_quotes_text(f"{rel_folder}/{name}", text)
+    return failures, notes
+
+
+def check_trips(root: Path = ROOT) -> tuple[list[str], list[str]]:
+    failures: list[str] = []
+    notes: list[str] = []
+    trips = root / TRIPS_DIR
+    if trips.is_dir():
+        for folder in sorted(p for p in trips.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))):
+            f, n = check_trip_folder(folder, f"{TRIPS_DIR}/{folder.name}")
+            failures += f
+            notes += n
+    log = root / TRIP_LOG
+    if log.is_file():
+        failures += check_trip_log_text(log.read_text(encoding="utf-8"))
+    return failures, notes
+
+
 # --- main --------------------------------------------------------------------
 
 
@@ -596,8 +853,10 @@ def main(argv: list[str]) -> int:
     memory_failures = check_memory()
     intake_failures = check_intake()
     setup_failures = check_setup(files)
+    trip_failures, trip_notes = check_trips()
+    notes += trip_notes
 
-    sections = (("BUDGET", budget_failures), ("ORPHANS", orphan_failures), ("KB", kb_problems), ("MEMORY", memory_failures), ("INTAKE", intake_failures), ("SETUP", setup_failures))
+    sections = (("BUDGET", budget_failures), ("ORPHANS", orphan_failures), ("KB", kb_problems), ("MEMORY", memory_failures), ("INTAKE", intake_failures), ("SETUP", setup_failures), ("TRIPS", trip_failures))
     total = sum(len(f) for _, f in sections)
     for line in notes:
         print(line)
@@ -607,7 +866,7 @@ def main(argv: list[str]) -> int:
             for f in failures:
                 print(f"  [{label}] {f}", file=sys.stderr)
         return 1
-    print(f"OK - {len(assign(files, budgets))} document(s) classified and within budget; kb index current; memory folder clean; intake cells in form; no setup marker left.")
+    print(f"OK - {len(assign(files, budgets))} document(s) classified and within budget; kb index current; memory folder clean; intake cells in form; no setup marker left; trip files in form.")
     return 0
 
 
