@@ -46,7 +46,7 @@ The owner does not run git. Claude does, every time, without being asked — and
 
 ## The gate decides a commit by its exit code
 
-Sat 2026-10-03: `check_docs.py 2>&1 | tail -2 && git commit …` committed and pushed a route file 102 b over budget; the pipe's exit code was `tail`'s, and the FAIL line fell outside the two lines shown. Fixed the next commit. The commit runs only on the gate's own exit code: `check_docs.py > f 2>&1 || { cat f; exit 1; }`. Open, not built: a git `pre-commit` hook that runs the gate, so a failing tree cannot commit from any window.
+Sat 2026-10-03: `check_docs.py 2>&1 | tail -2 && git commit …` committed and pushed a route file 102 b over budget; the pipe's exit code was `tail`'s, and the FAIL line fell outside the two lines shown. Fixed the next commit. The commit runs only on the gate's own exit code: `check_docs.py > f 2>&1 || { cat f; exit 1; }`. It recurred Sun 2026-10-04 (`… | grep -v … | tail -1 && git add … && git commit`, decisions.md 610 b over). Built that day: `scripts/githooks/pre-commit` runs the gate and refuses the commit on a non-zero exit, from any window; installed with `git config core.hooksPath scripts/githooks` (per clone, not tracked by git). Tested: a tree 1,391 b over refused.
 
 ## Archive before a structural edit
 
