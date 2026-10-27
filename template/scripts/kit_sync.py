@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Keep this project's kit-owned files and the Starter Kit in step.
 
-    python scripts/kit_sync.py status          # every kit-owned file; exit 1 on any UNDECIDED
-    python scripts/kit_sync.py push <path>     # project -> kit, commit in the kit, push the kit
-    python scripts/kit_sync.py pull <path>     # kit -> project
-    python scripts/kit_sync.py keep <path>     # this difference is local; stop asking
+    <venv python> scripts/kit_sync.py status          # every kit-owned file; exit 1 on any UNDECIDED
+    <venv python> scripts/kit_sync.py push <path>     # project -> kit, commit in the kit, push the kit
+    <venv python> scripts/kit_sync.py pull <path>     # kit -> project
+    <venv python> scripts/kit_sync.py keep <path>     # this difference is local; stop asking
     add --merged to push/pull when BOTH sides changed and you merged them by hand
 
 WHY THIS EXISTS
@@ -93,7 +93,7 @@ def kit_root(rec: dict) -> Path:
     if kit is None or not (kit / OWNED_LIST).is_file():
         url = rec.get("kit_url") or "the Starter Kit's repository"
         said = f"{where} points at {kit}, which has no {OWNED_LIST}" if kit else "no copy of the Starter Kit is known on this machine"
-        raise SystemExit(f"FAIL - {said}. Clone {url} and run its `python scripts/new_project.py profile --show` once (or set STARTER_KIT to the clone). Nothing was checked; this is not a pass.")
+        raise SystemExit(f"FAIL - {said}. Clone {url} and run its START_HERE.md profile step once (`<python> scripts/new_project.py profile --show`), or set STARTER_KIT to the clone. Nothing was checked; this is not a pass.")
     return kit
 
 
