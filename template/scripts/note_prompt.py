@@ -36,7 +36,7 @@ Registered in the tracked `.claude/settings.json`. The log,
 
 Ported 2026-09-24 from FACOWORK by way of HAZELHURST into the Starter Kit.
 This file is kit-owned: identical in every seeded project, and an improvement
-made here goes back with `python scripts/kit_sync.py push
+made here goes back with `<venv python> scripts/kit_sync.py push
 scripts/note_prompt.py`.
 """
 
