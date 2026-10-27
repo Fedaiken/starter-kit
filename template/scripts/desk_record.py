@@ -9,6 +9,7 @@ on Windows and `.venv/bin/python` elsewhere -- `project_identity.venv_python`):
     <venv python> scripts/desk_record.py disown copy-march records/2025/March.md --desk the-desk
     <venv python> scripts/desk_record.py route records/2025/March.md --ruling "the March deposit was a refund, not income" --asked "unprompted" --desk the-desk
     <venv python> scripts/desk_record.py report-done copy-march
+    <venv python> scripts/desk_record.py report-done copy-march --dry-run
     <venv python> scripts/desk_record.py show
     <venv python> scripts/desk_record.py show copy-march
     <venv python> scripts/desk_record.py close-desk --desk the-desk
@@ -34,7 +35,7 @@ Adapted from the claims register and brief stamps in Fantasy Football's
 one shared tree, there is no push queue, and only the desk ever saves to git.
 
 This file is kit-owned: identical in every project the Starter Kit seeds, and
-an improvement made here goes back with `python scripts/kit_sync.py push
+an improvement made here goes back with `<venv python> scripts/kit_sync.py push
 scripts/desk_record.py`. What differs by project -- the reason tokens, and
 which of them read a source document -- is read from
 `scripts/reason_tokens.json` through `scripts/open_terminal.py`.
@@ -50,10 +51,34 @@ ONE ACT, NOT TWO
   sent to cannot be closed on the strength of a `done` it reported earlier --
   and prints the line to send each one.
 
+RECEIPTS BY SCRIPT
+------------------
+`report-done <lane>` runs every command the stamped sheet's `done:` names
+ITSELF -- unpiped, from the project root, under THE DONE SHELL below --
+writes each command, its exit code and the bytes it printed to
+`<home>/done/<lane>.receipts.md`, prints them, and records the lane done only
+when every command exited 0. A lane once ran its commands and copied the
+output into its message by hand; a receipt typed by the window it vouches for
+is testimony, and one run by this script is a measurement. `--dry-run` does
+everything but run.
+
+THE DONE SHELL
+--------------
+No shell at all: each command is split into words by POSIX rules (Python's
+`shlex`, the rules the Bash tool reads a line by) and run as that list. So
+nothing a shell does can happen -- no pipe (`| tail` reports the pipe's exit
+code, not the command's), no redirect, no `&&` or `;`, no variable, no glob --
+and the stamp refuses a `done:` command that needs one, a template placeholder
+left in (`<lane>`), a Windows backslash outside quotes (POSIX reads it as an
+escape), a first word that is not a program, or a git subcommand
+`scripts/lane_guard.py` refuses (a command run by this script never passes
+through the guard's hook). A lane finds out at the stamp, not at the end.
+
 SINGLE WRITER
 -------------
-The desk writes this record and nothing else does; a lane's one write is its
-own `done/<lane>.json` in the desk's home, through `report-done`. `--desk` is
+The desk writes this record and nothing else does; a lane's writes are its
+own `done/<lane>.json` and `done/<lane>.receipts.md` in the desk's home,
+through `report-done`. `--desk` is
 checked against the name on file: cooperative, not security, but it is the
 difference between a lane that briefed itself and one that was briefed.
 
@@ -88,6 +113,8 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -211,6 +238,226 @@ def whole_suite_lines(done: str) -> list[str]:
 #: against fifty real briefs: backticks are not required, because the defect is
 #: a `done:` that names NO measurement, not one that is unquoted.
 RUNNABLE = re.compile(r"\.(?:py|exe)\b|\bpytest\b|\bgit\s+[a-z][a-z-]*\b")
+
+# --- the done shell (the docstring's THE DONE SHELL) --------------------------
+
+#: A template placeholder the desk was meant to fill: `<lane>`, `<home>`,
+#: `<N>`, `<YYYY-MM-DD>`, `<venv python>`. A letter first and a letter or digit
+#: last, so `x<5 and y>2`, `a < b`, a redirect (`> out.txt`) and a closing tag
+#: (`</b>`) are never one.
+_PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9 _'-]*(?<=[A-Za-z0-9])>")
+#: What sits beside a placeholder that stands in for part of a PATH:
+#: `S<N>/`, `_<PC>_`, `<YYYY-MM-DD>.md`.
+_PATH_BEFORE = ("/", "_")
+_PATH_AFTER = re.compile(r"[/_]|\.[A-Za-z0-9]")
+#: A quoted shell argument that is a Python program: `python.exe -c "..."`.
+_PROGRAM_FLAG = re.compile(r"(?:^|\s)-c\s*$")
+#: A string in a program handed to a call as its first argument -- `open('`,
+#: `glob.glob('`, `exists(f'` -- and one being tested rather than used.
+_CALL_OPEN = re.compile(r"\(\s*[rRbBfFuU]{0,2}$")
+_COMPARED = re.compile(r"\s*(?:not\s+in\b|in\b|[=!]=)")
+#: A list marker opening a `done:` line: `- `, `* `, `1. `, `2) `.
+_LIST_MARK = re.compile(r"^(?:[-*]|\d+[.)])\s+")
+#: What a shell would act on outside quotes. None of it happens here, so a
+#: command that needs one is refused rather than run as something else.
+_SHELL_CHARS = {"|": "a pipe", "&": "`&` or `&&`", ";": "`;`", "<": "a redirect",
+                ">": "a redirect", "`": "a backtick substitution"}
+_VARIABLE = re.compile(r"\$[({A-Za-z_]")
+_FIRST_WORD = re.compile(r"""^(?:"([^"]*)"|'([^']*)'|(\S+))""")
+#: A first word that is a program: a path or name ending `.exe`, or one of these.
+PROGRAM_WORDS = ("git", "pytest", "python", "python3", "py")
+#: How long one `done:` command may run before it is killed and fails.
+DONE_TIMEOUT = 1800
+#: The exit a command that could not be started is recorded with.
+NOT_RUN_EXIT = 127
+
+
+def quote_contexts(line: str) -> list[tuple[int | None, bool, int | None]]:
+    """For each character of a command line: where the shell-quoted span it
+    sits in opened (None outside quotes), whether that span is a `-c` program,
+    and where the program's string it sits in opened (None outside one).
+    Shell-style, read loosely: a backslash inside double quotes escapes the
+    next character."""
+    contexts: list[tuple[int | None, bool, int | None]] = []
+    shell_quote, shell_open, program = "", None, False
+    string_quote, string_open = "", None
+    escaped = False
+    for index, ch in enumerate(line):
+        if not shell_quote:
+            contexts.append((None, False, None))
+            if ch in "'\"":
+                shell_quote, shell_open = ch, index
+                program = _PROGRAM_FLAG.search(line[:index]) is not None
+            continue
+        contexts.append((shell_open, program, string_open if string_quote else None))
+        if escaped:
+            escaped = False
+        elif ch == "\\" and shell_quote == '"':
+            escaped = True
+        elif ch == shell_quote:
+            shell_quote, string_quote, string_open = "", "", None
+        elif program and string_quote:
+            if ch == string_quote:
+                string_quote, string_open = "", None
+        elif program and ch in "'\"":
+            string_quote, string_open = ch, index
+            contexts[-1] = (shell_open, program, index)
+    return contexts
+
+
+def placeholders_left(done: str) -> list[str]:
+    """Every template placeholder left in a `done:` command line, in order.
+
+    A placeholder counts when it is an ARGUMENT: bare (`--lane <lane>`,
+    `<home>/done/...`), or part of a quoted path (`"records/<N>.md"`). Inside
+    a `-c` program it counts only in a PATH HANDED TO A CALL
+    (`open('records/<N>/x.md')`), never in a string the check TESTS FOR (`'<lane>'
+    in text`) -- and Python's own `<` and `>` (`len(t)<n and m>0`) are not
+    placeholders. Prose in a `done:` block is not a command and is not read.
+    """
+    found: list[str] = []
+    for line in done.splitlines():
+        if RUNNABLE.search(line) is None:
+            continue
+        contexts = quote_contexts(line)
+        for mark in _PLACEHOLDER.finditer(line):
+            shell_open, program, string_open = contexts[mark.start()]
+            path_part = (line[mark.start() - 1:mark.start()] in _PATH_BEFORE
+                         or _PATH_AFTER.match(line, mark.end()) is not None)
+            if shell_open is None:
+                counts = True
+            elif not program:
+                counts = path_part
+            elif string_open is None:
+                counts = False
+            else:
+                close = line.find(line[string_open], mark.end())
+                after = line[close + 1:] if close != -1 else ""
+                counts = (path_part
+                          and _CALL_OPEN.search(line[:string_open]) is not None
+                          and _COMPARED.match(after) is None)
+            if counts:
+                found.append(mark.group(0))
+    return found
+
+
+def is_program(word: str) -> bool:
+    name = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name.endswith(".exe") or name in PROGRAM_WORDS
+
+
+def done_commands(done: str) -> list[str]:
+    """The commands a `done:` block names, in order: a line that opens with a
+    backtick is the span inside it (`` `cmd` exits 0 ``), any other line is
+    whole, a list marker dropped. It is a command when RUNNABLE finds one in
+    it AND it opens with a program; anything else is prose and is not run. A
+    parenthesized note -- a paragraph opening `(` through the line that closes
+    it -- is prose on every line, whatever a line of it opens with."""
+    found: list[str] = []
+    in_note = False
+    for line in done.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            in_note = False
+            continue
+        if in_note or stripped.startswith("("):
+            in_note = not re.search(r"\)[.;:]?$", stripped)
+            continue
+        text = _LIST_MARK.sub("", stripped)
+        if text.startswith("`"):
+            close = text.find("`", 1)
+            text = text[1:close] if close > 0 else text[1:]
+        text = text.strip()
+        first = _FIRST_WORD.match(text)
+        if (text and RUNNABLE.search(text) and first
+                and is_program(next(g for g in first.groups() if g is not None))):
+            found.append(text)
+    return found
+
+
+def command_words(command: str) -> tuple[list[str] | None, str | None]:
+    """(the words the done shell runs, None), or (None, why it cannot)."""
+    contexts = quote_contexts(command)
+    for index, ch in enumerate(command):
+        if contexts[index][0] is not None:
+            continue
+        if ch in _SHELL_CHARS:
+            return None, (f"it needs a shell for {_SHELL_CHARS[ch]} (`{ch}` outside "
+                          f"quotes), and report-done runs no shell: run the one "
+                          f"command, unpiped")
+        if ch == "\\":
+            return None, ("it carries a backslash outside quotes, which POSIX word "
+                          "rules read as an escape: write the path with forward slashes")
+        if ch == "$" and _VARIABLE.match(command, index):
+            return None, "it names a shell variable, and report-done expands none"
+    try:
+        words = shlex.split(command, posix=True)
+    except ValueError as exc:
+        return None, f"its quotes do not close ({exc})"
+    if not words:
+        return None, "it is empty"
+    if not is_program(words[0]):
+        return None, (f"its first word `{words[0]}` is not a program: open the line "
+                      f"with the interpreter or git, or put prose outside the backticks")
+    return words, None
+
+
+def command_problem(command: str) -> str | None:
+    """Why the stamp refuses this `done:` command, or None: it does not split
+    into words under the done shell, or it runs a git subcommand the lane
+    guard refuses -- a command run by `report-done` never meets the guard."""
+    _words, why = command_words(command)
+    if why:
+        return why
+    from lane_guard import REFUSED, refused_subcommands
+    refused = refused_subcommands(command)
+    if refused:
+        return (f"it runs `git {refused[0]}`, which a lane never runs: "
+                f"{REFUSED[refused[0]]}")
+    return None
+
+
+def resolve_program(program: str, repo: Path) -> str | None:
+    """The program's full path: a path with a slash from the project root
+    (Windows resolves a relative program against the CALLER's folder, not the
+    one it is started in), a bare name from PATH; None when there is none."""
+    path = program.replace("\\", "/")
+    if "/" in path:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = repo / candidate
+        return str(candidate) if candidate.is_file() else None
+    return shutil.which(program)
+
+
+def dry_run(command: str, repo: Path | None = None) -> tuple[list[str] | None, str | None]:
+    """Everything `report-done` does to a command but run it: (the argv it
+    would start, None), or (None, why it cannot start)."""
+    repo = REPO if repo is None else repo
+    why = command_problem(command)
+    if why:
+        return None, why
+    words, _ = command_words(command)
+    program = resolve_program(words[0], repo)
+    if program is None:
+        return None, f"no program `{words[0]}` from {repo.as_posix()}"
+    return [program, *words[1:]], None
+
+
+def run_done_command(argv: Sequence[str], cwd: Path) -> tuple[int, str]:
+    """(exit code, everything it printed, stdout and stderr as they came --
+    unbuffered, so a Python program's two streams keep the order it wrote)."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    try:
+        proc = subprocess.run(list(argv), cwd=str(cwd), stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                              env=env, timeout=DONE_TIMEOUT, check=False)
+    except subprocess.TimeoutExpired as exc:
+        said = (exc.output or b"").decode("utf-8", "replace").replace("\r\n", "\n")
+        return -1, said + f"\n[report-done: killed after {DONE_TIMEOUT} seconds]\n"
+    except OSError as exc:
+        return NOT_RUN_EXIT, f"[report-done: could not start it: {exc}]\n"
+    return proc.returncode, proc.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
 
 #: A lane that works FROM a source document reads the document, never only a
 #: summary of it (CLAUDE.md, Source of Truth: kb digests are derived). So a
@@ -637,10 +884,32 @@ def sheet_problems(text: str, repo: Path | None = None) -> list[str]:
     if RUNNABLE.search(fields["done"]) is None:
         problems.append(
             "`done:` names no runnable command. Done is a MEASUREMENT -- a "
-            "script whose output the lane quotes back -- never prose like "
+            "command `report-done` runs and records -- never prose like "
             "\"the text reads correctly\", which is settled by whoever is "
             "asked last"
         )
+    left_in = placeholders_left(fields["done"])
+    if left_in:
+        problems.append(
+            f"`done:` still carries the template placeholder(s) "
+            f"{', '.join(dict.fromkeys(left_in))}. The command fails when "
+            f"report-done runs it, after the work is done -- fill each one in "
+            f"with the real value"
+        )
+    commands = done_commands(fields["done"])
+    if RUNNABLE.search(fields["done"]) and not commands:
+        problems.append(
+            "`done:` names a command only inside prose. `report-done` runs a line "
+            "that opens with the command, or the span inside a line's opening "
+            "backticks -- start the line with the command"
+        )
+    for command in commands:
+        if placeholders_left(command):
+            continue
+        why = command_problem(command)
+        if why:
+            problems.append(f"`done:` command `{command}` cannot be run by "
+                            f"`report-done` as written: {why}")
     for line in whole_suite_lines(fields["done"]):
         problems.append(
             f"`done:` runs the whole test suite: `{line}`. Name the lane's own "
@@ -1013,20 +1282,85 @@ def route(desk: str, paths: Sequence[str], ruling: str, log: str | None,
     return said
 
 
-def report_done(lane: str) -> list[str]:
+def receipts_path(lane: str) -> Path:
+    """Where `report-done` writes `lane`'s receipts, beside its done file."""
+    return DONE_DIR / f"{lane}.receipts.md"
+
+
+def receipts_text(lane: str, digest: str, ran: str,
+                  results: Sequence[tuple[str, int, str]]) -> str:
+    """The receipts file: `# Receipts: <lane>`, `sheet: <12>`, `ran: <ISO>`,
+    then per command a blank line, `$ <command as the sheet names it>`,
+    `exit: <n>` on the very next line, and the bytes it printed."""
+    parts = [f"# Receipts: {lane}\n", f"sheet: {digest[:12]}\n", f"ran: {ran}\n"]
+    for command, code, printed in results:
+        parts.append(f"\n$ {command}\nexit: {code}\n")
+        if printed:
+            parts.append(printed if printed.endswith("\n") else printed + "\n")
+    return "".join(parts)
+
+
+def report_done(lane: str, *, dry: bool = False) -> list[str]:
+    """Run every command the stamped sheet's `done:` names, write the
+    receipts, and record the lane done only when every one exited 0 (the
+    docstring's RECEIPTS BY SCRIPT). `dry` does everything but run them, and
+    records nothing."""
     record = require_record()
     row = lane_row(record, lane)
     problem = stamped_sheet_problem(record, lane)
     if problem:
         raise DeskError(f"{problem}. Tell the desk in one line; nothing was recorded")
+    text = (REPO / row["sheet"]).read_text(encoding="utf-8")
+    commands = done_commands(parse_sheet(text)[0].get("done", ""))
+    if not commands:
+        raise DeskError(f"{row['sheet']}'s `done:` names no command report-done can "
+                        f"run. Tell the desk in one line; nothing was recorded")
+    if dry:
+        lines, refused = [], 0
+        for command in commands:
+            argv, why = dry_run(command)
+            lines.append(f"$ {command}")
+            if why:
+                refused += 1
+                lines.append(f"  would not run: {why}")
+            else:
+                lines.append(f"  would run: {argv}")
+        lines.append(f"dry run: {len(commands) - refused} of {len(commands)} command(s) "
+                     f"would run from {REPO.as_posix()}; nothing was run or recorded")
+        if refused:
+            raise DeskError(NL.join(lines))
+        return lines
+    ran = now_iso()
+    results = []
+    for command in commands:
+        argv, why = dry_run(command)
+        if why:
+            results.append((command, NOT_RUN_EXIT, f"[report-done: not run: {why}]\n"))
+        else:
+            code, printed = run_done_command(argv, REPO)
+            results.append((command, code, printed))
     DONE_DIR.mkdir(parents=True, exist_ok=True)
+    receipts = receipts_text(lane, row["sha256"], ran, results)
+    receipts_path(lane).write_text(receipts, encoding="utf-8", newline="\n")
+    where = receipts_path(lane).relative_to(REPO).as_posix()
+    failed = [command for command, code, _ in results if code != 0]
+    if failed:
+        raise DeskError(
+            f"{receipts}\n{len(failed)} of {len(results)} `done:` command(s) did not "
+            f"exit 0: {', '.join(f'`{c}`' for c in failed)}. {lane} is NOT recorded as "
+            f"done (receipts in {where}). Fix the work and run report-done again; if it "
+            f"cannot pass, that is a `question:` to the desk")
     # Strictly after the lane was last put to work, even inside one clock tick.
     at = max(time.time(), float(row.get("working_since", 0)) + AFTER)
     done_path(lane).write_text(
-        json.dumps({"lane": lane, "at": at, "at_iso": now_iso()}) + "\n",
+        json.dumps({"lane": lane, "at": at, "at_iso": now_iso(),
+                    "sheet": row["sha256"][:12], "receipts": where}) + "\n",
         encoding="utf-8", newline="\n")
-    return [f"{lane} is recorded as done. Send the desk your `done:` line with "
-            f"its receipts; the desk closes this window, you do not"]
+    return [receipts.rstrip("\n"), "",
+            f"{lane} is recorded as done: every `done:` command exited 0, receipts in "
+            f"{where}. Send the desk ({record.get('desk')}) `done: {lane}, <the paths "
+            f"you changed>` and `receipts: {where}`; the desk closes this window, you "
+            f"do not"]
 
 
 def show_lines(record: dict, lane: str | None = None) -> list[str]:
@@ -1198,8 +1532,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("--asked", required=True,
                      help="the question the ruling answers, as put to the owner, or 'unprompted'")
     sub.add_argument("--log", help="the log to append to (default desk_log.md in the desk's home)")
-    sub = acts.add_parser("report-done", help="a lane records that its work is finished")
+    sub = acts.add_parser("report-done", help="run the sheet's `done:` commands; record done on all-zero")
     sub.add_argument("lane")
+    sub.add_argument("--dry-run", action="store_true",
+                     help="split and resolve every `done:` command; run and record nothing")
     sub = acts.add_parser("show", help="the desk, its lanes, and what each owns")
     sub.add_argument("lane", nargs="?")
     desk_act("close-desk", "archive the record of a finished job")
@@ -1228,7 +1564,7 @@ def main(argv: Sequence[str] = ()) -> int:
         elif args.act == "route":
             said = route(args.desk, args.paths, args.ruling, args.log, args.asked)
         elif args.act == "report-done":
-            said = report_done(args.lane)
+            said = report_done(args.lane, dry=args.dry_run)
         elif args.act == "show":
             said = show(args.lane)
         else:
