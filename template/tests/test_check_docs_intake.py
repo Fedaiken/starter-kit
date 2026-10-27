@@ -73,6 +73,13 @@ def test_section_reference_does_not_excuse_a_figure_beside_it():
     assert "$4,500" in out[0] and "§3" not in out[0]
 
 
+def test_parked_cell_passes_and_needs_its_pointer_like_any_other():
+    assert "parked" in cd.INTAKE_STATUS_WORDS
+    assert cd.check_intake_text(table("**parked** — goals interview, back once the export mod shows the colony — `Games/a.md`")) == []
+    out = cd.check_intake_text(table("**parked** — goals interview"))
+    assert len(out) == 1 and "pointer" in out[0]
+
+
 def test_unknown_status_word_fails():
     out = cd.check_intake_text(table("**received** — `kb/agreement.md`"))
     assert len(out) == 1
