@@ -49,7 +49,7 @@ done:
 
 def out(repo, *args):  # noqa: F811
     return subprocess.run(["git", *args], cwd=str(repo), check=True,
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8").stdout
 
 
 @pytest.fixture
@@ -116,7 +116,7 @@ def test_the_environment_names_the_home_when_the_module_loads():
     code = ("import desk_record as d; print(d.HOME); "
             "print(d.RECORD.relative_to(d.REPO).as_posix()); print(d.HOME_PROBLEM)")
     said = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT / "scripts"),
-                          capture_output=True, text=True,
+                          capture_output=True, text=True, encoding="utf-8",
                           env={**os.environ, dr.HOME_ENV: ALPHA}, check=True)
     assert said.stdout.split() == ["coordination/desks/statements",
                                    "coordination/desks/statements/desk_record.json", "None"]
@@ -202,6 +202,7 @@ def test_a_lane_reports_done_to_its_own_desk(two):
     at(BETA)
     dr.report_done("draft-landlord")
     assert (two / "coordination/desks/letters/done/draft-landlord.json").exists()
+    assert (two / "coordination/desks/letters/done/draft-landlord.receipts.md").exists()
     at(ALPHA)
     with pytest.raises(dr.DeskError, match="no lane 'draft-landlord'"):
         dr.report_done("draft-landlord")
@@ -338,7 +339,7 @@ def test_the_wrapper_really_runs_the_tool_there():
     """End to end in a fresh process: the tool reads the home from the environment."""
     said = subprocess.run([sys.executable, str(Path(dh.__file__)), "nobody-home-here",
                            "desk_record.py", "show"], capture_output=True, text=True,
-                          check=False)
+                          encoding="utf-8", check=False)
     assert said.returncode == 2
     assert "no desk record in coordination/desks/nobody-home-here/" in said.stderr
 
