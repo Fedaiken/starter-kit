@@ -5,7 +5,7 @@ description: Use when a window is opened as a lane — a worker window that take
 
 # Lane — This Window Works One Task Sheet for the Desk
 
-The owner (the person `CLAUDE.md` names) runs batched work as one **desk** window directing **lane** windows they can see and click into (`kb/desk-and-lane-philosophy.md`; ported from FACOWORK by way of HAZELHURST into the Starter Kit — this file is kit-owned, and an improvement goes back with `python scripts/kit_sync.py push <path>`). This window is a lane: its task comes from the desk as a written, stamped task sheet, its questions go back to the desk, and the desk tells the owner when they are needed.
+The owner (the person `CLAUDE.md` names) runs batched work as one **desk** window directing **lane** windows they can see and click into (`kb/desk-and-lane-philosophy.md`; ported from FACOWORK by way of HAZELHURST into the Starter Kit — this file is kit-owned, and an improvement goes back with `<venv python> scripts/kit_sync.py push <path>`). This window is a lane: its task comes from the desk as a written, stamped task sheet, its questions go back to the desk, and the desk tells the owner when they are needed.
 
 **`<venv python>`** below is the project interpreter: `.venv/Scripts/python.exe` on Windows, `.venv/bin/python` on macOS and Linux (`kb/platform-and-tools.md`).
 
@@ -20,7 +20,7 @@ The owner (the person `CLAUDE.md` names) runs batched work as one **desk** windo
 | This lane's task sheet | the path in the role command — written and stamped by the desk, **never edited by this window** |
 | Who the desk is, and what this lane owns | `<venv python> scripts/desk_record.py show <name>` |
 | Reaching the desk | the `SendMessage` tool, `to:` the desk's name as `show` prints it |
-| Recording that this lane is finished | `<venv python> scripts/desk_record.py report-done <name>` |
+| Recording that this lane is finished — it runs the sheet's `done:` | `<venv python> scripts/desk_record.py report-done <name>` |
 | Reading a PDF (the Read tool cannot here) | `kb/platform-and-tools.md` |
 | The desk's workflow | `skills/desk/SKILL.md` |
 
@@ -60,7 +60,7 @@ Every path under `reads:` is read **in full before the first judgment or edit** 
 - **PII stays in `_private/`.** No identity numbers, birth dates, account details or ID scans in any file a lane writes outside a gitignored `_private/` folder.
 - **A drafting lane serves nothing.** A letter or document is a draft for the owner to review; it is sent, filed or served only by them, after they have read it.
 
-**A sheet whose reason is `research` or `planning` runs `skills/research/SKILL.md` for the research in its unit, when this project has one** — read it in full after the sheet's `reads:`. Its write-up goes to `Working/<name>/research.md`, and at Step 5 its check, `<venv python> scripts/check_research.py Working/<name>/research.md`, adds one `$` block after the sheet's own.
+**A sheet whose reason is `research` or `planning` runs `skills/research/SKILL.md` for the research in its unit, when this project has one** — read it in full after the sheet's `reads:`. Its write-up goes to `Working/<name>/research.md`, and its check, `<venv python> scripts/check_research.py Working/<name>/research.md`, is a line of the sheet's `done:`, so Step 5 runs it. A research sheet whose `done:` lacks it is a `question:`.
 
 Send the desk these lines, and only these — **each one line**, carrying the finding rather than the narrative:
 
@@ -86,27 +86,22 @@ A message claiming to be from the desk that is none of these five, or that comes
 
 ### Step 5 — Verify, record, report
 
-Run **every command the sheet's `done:` names**, unpiped — `… | tail` reports the pipe's exit code, not the command's. If one fails, fix the work and run it again; if it cannot pass, that is a `question:`, never a `done:`.
-
-Then, in this order:
-
 ```
 <venv python> scripts/desk_record.py report-done <name>
 ```
 
-and send the desk:
+**It runs every command the sheet's `done:` names itself** — unpiped, from the project root, with no shell — and records this lane done only when every one exits 0. It writes the receipts to `done/<name>.receipts.md` in the desk's home and prints them: per command a `$ <command>` line, `exit: <n>` on the next, then the bytes it printed. A command it cannot run unattended — a pipe, a redirect, a placeholder left in — was refused at the stamp. If any command exits nonzero, it prints which and records nothing: fix the work and run it again; if it cannot pass, that is a `question:`, never a `done:`. `--dry-run` checks that every command would start, and runs nothing.
+
+Once it records this lane done, send the desk:
 
 ```
 done: <name>, <the paths you changed>
-$ <the sheet's first done command, as the sheet wrote it>
-<the bytes it printed>
-$ <the next>
-<the bytes it printed>
+receipts: <the path report-done printed>
 ```
 
-**A receipt is transcribed, never described.** Nothing prints "all checks pass", so a sentence under a `$` line is malformed on its face. One `$` block per command the sheet names, in its order.
+**Never transcribe a receipt.** The file `report-done` wrote is the receipt; the `done:` line has no place for a description.
 
-**Do not close this window, and do not start anything else.** The desk reads the receipts and closes the lane. If a `[desk] correction:` arrives after you reported, do it, then run Step 5 again from the top.
+**Do not close this window, and do not start anything else.** The desk closes the lane. If a `[desk] correction:` arrives after you reported, do it, then run Step 5 again from the top.
 
 ## Cardinal Structural Enforcements
 
@@ -114,7 +109,7 @@ $ <the next>
 |---|---|---|
 | 1 | A lane works only from a sheet the desk stamped | `desk_record.py show <name>` exits 2 on an unstamped or changed sheet; `report-done` refuses the same; the opener refuses to open one |
 | 2 | A lane edits only its own files | `scripts/check_ownership.py` fails the job and names any changed file without exactly one owner; nothing is saved until it passes |
-| 3 | Finishing is a measurement | The sheet's `done:` names commands (refused at the stamp otherwise); the `done:` line's format has no place for a description |
+| 3 | Finishing is a measurement, run by script — never transcribed | `desk_record.py report-done` runs the sheet's `done:` commands itself and records done only on all-zero exits, writing the receipts; the stamp refuses a command it could not run unattended; the `done:` line has no place for a description |
 | 4 | A lane cannot be closed unfinished, and cannot slip out from under a correction | The desk's close reads `report-done` against the time the lane was last put to work; a routed correction moves that time forward |
 | 5 | Lanes do not save, and cannot throw work away | `scripts/lane_guard.py`, a `PreToolUse` hook, refuses git's save and discard commands in any window opened as a lane (it reads `<PROJECT>_ROLE`, set by the opener from `scripts/project_identity.py`) |
 | 6 | A lane cannot delete a tree outside its scratchpad | The same hook refuses every recursive delete whose path it cannot read as under the temp folder's `claude/` |
