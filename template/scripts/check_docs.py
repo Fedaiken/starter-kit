@@ -146,7 +146,7 @@ MEMORY_TYPES = ("user", "feedback", "project", "reference")
 
 # --- intake contract ---------------------------------------------------------
 INTAKE_FILE = "Intake_Checklist.md"
-INTAKE_STATUS_WORDS = ("on file", "found", "partly found", "needed", "action needed", "urgent")
+INTAKE_STATUS_WORDS = ("on file", "found", "partly found", "needed", "action needed", "urgent", "parked")
 _INTAKE_STATUS = re.compile(
     r"^\*{0,2}(?:" + "|".join(re.escape(w) for w in sorted(INTAKE_STATUS_WORDS, key=len, reverse=True)) + r")\*{0,2}(?![\w-])"
 )
