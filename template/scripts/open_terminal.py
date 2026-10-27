@@ -41,7 +41,7 @@ nothing in it names the project. The environment variables, the shared window
 and the close-marker prefix come from `scripts/project_identity.py`, derived
 from the folder's name; the reason tokens come from this project's own
 `scripts/reason_tokens.json`. An improvement made here goes back to the kit
-with `python scripts/kit_sync.py push scripts/open_terminal.py`.
+with `<venv python> scripts/kit_sync.py push scripts/open_terminal.py`.
 
 THE JOB DECIDES THE MODEL (FACOWORK R16)
 ----------------------------------------
