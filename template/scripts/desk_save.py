@@ -41,7 +41,7 @@ to remember, in the only order that works:
   4. `git push origin main`.
 
 This file is kit-owned: identical in every project the Starter Kit seeds, and
-an improvement made here goes back with `python scripts/kit_sync.py push
+an improvement made here goes back with `<venv python> scripts/kit_sync.py push
 scripts/desk_save.py`.
 
 Exit codes:
