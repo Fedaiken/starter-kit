@@ -5,7 +5,7 @@ WHY THIS EXISTS
 ---------------
 The desk-and-lane scripts are kit-owned: byte-identical in every project the
 Starter Kit seeds, kept in step by `scripts/kit_sync.py` (an improvement made
-in a project goes back with `python scripts/kit_sync.py push <path>`). So none
+in a project goes back with `<venv python> scripts/kit_sync.py push <path>`). So none
 of them may name the project it runs in. In the first port (from FACOWORK to
 HAZELHURST, 2026-09-24) the project's name was written into four places: the
 role variable, the window variable, the shared Windows Terminal window and the
