@@ -14,7 +14,7 @@ traced.
 Carried from FACOWORK by way of HAZELHURST into the Starter Kit (2026-09-24);
 the manual line for machines without Windows Terminal was added there.
 This file is kit-owned: identical in every seeded project, and an improvement
-made here goes back with `python scripts/kit_sync.py push scripts/wt.py`.
+made here goes back with `<venv python> scripts/kit_sync.py push scripts/wt.py`.
 
 WHY THE COMMAND IS BASE64 AND NOT QUOTED
 ---------------------------------------
