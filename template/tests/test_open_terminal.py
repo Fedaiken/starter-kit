@@ -639,6 +639,10 @@ def desk(room, tmp_path, monkeypatch):
     (tmp_path / "sheets").mkdir()
     (tmp_path / "sheets" / "lane-alpha.md").write_text(SHEET, encoding="utf-8")
     monkeypatch.setattr(dr, "take_baseline", lambda repo=None: {})
+    # `report-done` runs the sheet's `done:` commands; the stand-in workspace
+    # has no `verify_figures.py`, and only the kill may reach subprocess here.
+    monkeypatch.setattr(dr, "resolve_program", lambda program, where: str(where / program))
+    monkeypatch.setattr(dr, "run_done_command", lambda argv, cwd: (0, "ok\n"))
     dr.open_desk("the-desk", "a test job", inherit=False)
     dr.stamp("the-desk", "lane-alpha", "sheets/lane-alpha.md")
     return room
