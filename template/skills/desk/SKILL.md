@@ -67,7 +67,7 @@ A `research` or `planning` sheet owns `Working/<name>` for the research write-up
 
 **Size the `reads:` list before stamping** — one lane's full read has a ceiling, and the stamp does not measure it yet. The measured numbers and how to split: `kb/lane-context-sizing.md`.
 
-**A `done:` for work that touches a `.md` or `.html` includes `<venv python> scripts/check_docs.py`, the interpreter written out.** A new document needs a row in `doc_budgets.yaml`, which the lane cannot write unless it owns that file — so the desk either gives `doc_budgets.yaml` to exactly one lane, or writes no sheet that creates a document.
+**A `done:` for work that touches a `.md` or `.html` includes `<venv python> scripts/check_docs.py`, the interpreter written out.** A new document needs a `doc_budgets.yaml` row claiming it (check first: a glob row like `kb/*.md` may already), which the lane cannot write unless it owns that file — so the desk either gives `doc_budgets.yaml` to exactly one lane, or writes no sheet that creates a document.
 
 ## The Run
 
