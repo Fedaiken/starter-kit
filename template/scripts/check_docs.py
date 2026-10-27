@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """The document gate: budgets, reachability, kb frontmatter, memory caps.
 
-    python scripts/check_docs.py              # run every check; exit 1 on a hit
-    python scripts/check_docs.py --report     # every budgeted file at % used, then the checks
-    python scripts/check_docs.py --write-kb   # render kb/README.md from frontmatter, then the checks
+    <venv python> scripts/check_docs.py              # run every check; exit 1 on a hit
+    <venv python> scripts/check_docs.py --report     # every budgeted file at % used, then the checks
+    <venv python> scripts/check_docs.py --write-kb   # render kb/README.md from frontmatter, then the checks
 
 WHY THIS EXISTS
 ---------------
@@ -15,7 +15,7 @@ next append. FF's answer is four gates; this file is those four in one script,
 sized for a project with no venv and no test suite. Ported to HAZELHURST
 2026-09-24 and carried by the Starter Kit from there (`kb/document-budgets.md`).
 This file is kit-owned: an improvement made here is offered back to the kit by
-`python scripts/kit_sync.py` at close-session.
+`<venv python> scripts/kit_sync.py` at close-session.
 
 THE CHECKS
 ----------
@@ -78,6 +78,34 @@ THE CHECKS
    with no start point, a quote with no speaker on file was put in a
    companion's mouth, and the Trip Log's deadline cell had grown to 1,009
    characters of history.
+8. CLAIMS. A sentence quoting a document's budget matches its row. Each
+   `budget_claims:` row in `doc_budgets.yaml` names the document the sentence
+   is `in`, the row it is `about` (a `path:` or `glob:` as written) and what it
+   `says`, with `{budget}` where the figure goes; the gate renders the live
+   figure and requires that exact string. The same sentence with another figure
+   is STALE and names both; no such sentence is GONE, because a row that
+   matches nothing checks nothing. Then a coverage sweep: a byte figure
+   (`10,000 b`) within `CLAIM_WINDOW` characters of a budget word, in a
+   document no claim row and no `budget_prose_exempt:` row (`path`, `why`)
+   covers, fails "declare it or reword it"; an exemption whose document the
+   sweep would not flag is dead config and fails. The kit's own rows are in
+   this file (`KIT_BUDGET_CLAIMS`, `KIT_PROSE_EXEMPT`), so a project that pulls
+   it with its `doc_budgets.yaml` unchanged passes: a kit claim whose sentence
+   is absent checks nothing and leaves its document to the sweep, a kit
+   exemption is never dead, and a project row for the same document replaces
+   either. Ported 2026-10-26 from
+   Fantasy_Football, where a CLAUDE.md quoted a ceiling the config no longer
+   held for four days. Recognition is a declaration, not a predicate, on FF's
+   measurement: a scan for figures EQUAL to a budget cannot see a stale one by
+   construction, and budget-word proximity alone was 57% precise (hypotheticals,
+   other caps, dated history), so the sweep only asks for a declaration.
+
+Every YAML this gate reads (`doc_budgets.yaml`, kb and memory frontmatter)
+goes through `strict_load`, which refuses a repeated mapping key. `safe_load`
+keeps the last of two and drops the first without a word, so a second
+`budget:` in a row, or a second `entries:` list, would win silently. The one
+exception is the committed history `historical_floors` reads: a past revision
+cannot be fixed, and refusing it would drop its floors.
 
 There is no --fix. Deciding which paragraph is rationale that belongs in a
 docstring, which fact belongs in kb/, and which narrative git already holds is
@@ -143,6 +171,46 @@ class ConfigError(Exception):
     """doc_budgets.yaml is malformed. Exit 2: nothing was checked."""
 
 
+# --- strict yaml -------------------------------------------------------------
+
+
+class DuplicateKeyError(yaml.YAMLError):
+    """A mapping repeats a key. `line` and `first` are 1-based lines in the file."""
+
+    def __init__(self, key: object, line: int, first: int):
+        self.key, self.line, self.first = key, line, first
+        super().__init__(f"line {line}: key {key!r} repeats the one at line {first}; YAML keeps the last and drops the first without a word. Delete the one that is not the truth.")
+
+
+class _StrictLoader(yaml.SafeLoader):
+    line_offset = 0
+
+
+def _no_duplicate_keys(loader: _StrictLoader, node: yaml.MappingNode, deep: bool = False) -> dict:
+    seen: dict = {}
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        line = key_node.start_mark.line + 1 + loader.line_offset
+        if key in seen:
+            raise DuplicateKeyError(key, line, seen[key])
+        seen[key] = line
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys)
+
+
+def strict_load(text: str, line_offset: int = 0) -> object:
+    """`yaml.safe_load`, refusing a repeated mapping key. `line_offset` is the
+    number of file lines before `text`, so a frontmatter error names the file's line."""
+    loader = _StrictLoader(text)
+    loader.line_offset = line_offset
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 # --- helpers -----------------------------------------------------------------
 
 
@@ -182,7 +250,9 @@ def read_frontmatter(text: str) -> tuple[dict | None, str | None]:
         if lines[i].strip() in {"---", "..."}:
             block = "\n".join(lines[1:i])
             try:
-                loaded = yaml.safe_load(block)
+                loaded = strict_load(block, line_offset=1)
+            except DuplicateKeyError as exc:
+                return {}, f"frontmatter {exc}"
             except (yaml.YAMLError, ValueError) as exc:
                 problem = getattr(exc, "problem", None) or str(exc)
                 return {}, f"frontmatter is not valid YAML: {str(problem).splitlines()[0]}"
@@ -233,14 +303,39 @@ def parse_budgets(raw: object) -> dict:
     entries = raw.get("entries")
     if not isinstance(entries, list) or not entries:
         raise ConfigError("`entries` must be a non-empty list")
-    return {"exempt_dirs": list(exempt), "entries": [_validate_entry(e, i) for i, e in enumerate(entries)]}
+    validated = [_validate_entry(e, i) for i, e in enumerate(entries)]
+    first: dict[str, int] = {}
+    for i, entry in enumerate(validated):
+        key = _selector(entry)
+        if key in first:
+            raise ConfigError(f"entries[{i}] ({key}) repeats entries[{first[key]}]; one row per selector, or the two budgets disagree with nobody choosing")
+        first[key] = i
+    claims = [_validate_claim(c, i, validated) for i, c in enumerate(_optional_list(raw, "budget_claims"))]
+    prose_exempt: dict[str, str] = {}
+    for i, row in enumerate(_optional_list(raw, "budget_prose_exempt")):
+        doc, why = _validate_exemption(row, i)
+        if doc in prose_exempt:
+            raise ConfigError(f"budget_prose_exempt[{i}] ({doc}) is exempted twice")
+        prose_exempt[doc] = why
+    return {"exempt_dirs": list(exempt), "entries": validated, "budget_claims": claims, "budget_prose_exempt": prose_exempt}
+
+
+def _optional_list(raw: dict, key: str) -> list:
+    value = raw.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(f"`{key}` must be a list")
+    return value
 
 
 def load_budgets() -> dict:
     try:
-        raw = yaml.safe_load(BUDGETS_FILE.read_text(encoding="utf-8"))
+        raw = strict_load(BUDGETS_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ConfigError(f"{BUDGETS_FILE.name} does not exist") from exc
+    except DuplicateKeyError as exc:
+        raise ConfigError(f"{BUDGETS_FILE.name} {exc}") from exc
     except yaml.YAMLError as exc:
         raise ConfigError(f"{BUDGETS_FILE.name} is not valid YAML: {exc}") from exc
     return parse_budgets(raw)
@@ -264,6 +359,9 @@ def historical_floors() -> dict[str, int]:
         return floors
     for rev in revs:
         try:
+            # safe_load, not strict_load: a committed revision cannot be fixed,
+            # and refusing one would drop its floors. Its last key is what the
+            # gate read at the time.
             raw = yaml.safe_load(git("show", f"{rev}:{BUDGETS_FILE.name}"))
         except (RuntimeError, yaml.YAMLError):
             continue
@@ -374,6 +472,124 @@ def check_orphans(files: list[str], budgets: dict) -> list[str]:
     return find_orphans(files, budgets, roots, lambda rel: (ROOT / rel).read_text(encoding="utf-8"))
 
 
+# --- budget claims -----------------------------------------------------------
+
+# A byte figure as these documents write one: `10,000 b`, `8000 b`, `234 b`.
+# Three digits minimum, so a short sha (`88da27b`) is not a figure.
+_FIGURE = r"\d{1,3}(?:,\d{3})+|\d{3,}"
+_BYTE_FIGURE = re.compile(rf"(?<![\w,.])({_FIGURE})\s?b\b", re.IGNORECASE)
+# Used by both halves: the sweep looks for these, and a declared `says:` must
+# hold one outside its slot, so no row declares a sentence the sweep never sees.
+_BUDGET_WORDS = re.compile(r"budget|capped|cap\b|gated|ceiling", re.IGNORECASE)
+CLAIM_WINDOW = 25  # FF measured 12 and 25 flagging the same documents; 40 pulled in measurements
+# Rows every kit project carries, kept here rather than in each project's YAML.
+# The CLAUDE.md template quotes its own ceiling in this phrasing; the two kb
+# entries are kit-owned and their figures are history, not budgets.
+KIT_BUDGET_CLAIMS = ({"in": "CLAUDE.md", "about": "CLAUDE.md", "says": "is gated at {budget} b"},)
+KIT_PROSE_EXEMPT = {
+    "kb/document-budgets.md": "HAZELHURST's ceiling and size on its first day: dated history of another project",
+    "kb/git-discipline.md": "a route file's measured overage in an incident, not a budget",
+}
+
+
+def _validate_claim(row: object, index: int, entries: list[dict]) -> dict:
+    where = f"budget_claims[{index}]"
+    if not isinstance(row, dict):
+        raise ConfigError(f"{where} is not a mapping")
+    for key in ("in", "about", "says"):
+        if not isinstance(row.get(key), str) or not row[key].strip():
+            raise ConfigError(f"{where} needs a non-empty `{key}:`")
+    if "{budget}" not in row["says"]:
+        raise ConfigError(f"{where} ({row['in']}) `says:` has no {{budget}} slot, so it could never disagree with the config")
+    # The slot is removed first: `{budget}` holds the word "budget" and would satisfy this on its own.
+    if not _BUDGET_WORDS.search(row["says"].replace("{budget}", " ")):
+        raise ConfigError(f"{where} ({row['in']}) `says:` has no budget word ({_BUDGET_WORDS.pattern}), so the sweep that keeps this list honest would never find it")
+    about = [e for e in entries if _selector(e) == row["about"]]
+    if not about:
+        raise ConfigError(f"{where} ({row['in']}) `about: {row['about']}` names no entry; write a `path:` or `glob:` exactly as its row does")
+    if "budget" not in about[0]:
+        raise ConfigError(f"{where} ({row['in']}) `about: {row['about']}` is generated and has no budget to quote")
+    return {"in": row["in"], "about": row["about"], "says": row["says"], "budget": about[0]["budget"], "kit": False}
+
+
+def _kit_claims(budgets: dict) -> list[dict]:
+    """The kit's claims this project has not replaced and can resolve to a budget."""
+    own = {c["in"] for c in budgets["budget_claims"]}
+    out = []
+    for claim in KIT_BUDGET_CLAIMS:
+        rows = [e for e in budgets["entries"] if _selector(e) == claim["about"] and "budget" in e]
+        if claim["in"] not in own and rows:
+            out.append({**claim, "budget": rows[0]["budget"], "kit": True})
+    return out
+
+
+def _validate_exemption(row: object, index: int) -> tuple[str, str]:
+    where = f"budget_prose_exempt[{index}]"
+    if not isinstance(row, dict):
+        raise ConfigError(f"{where} is not a mapping")
+    if not isinstance(row.get("path"), str) or not row["path"].strip():
+        raise ConfigError(f"{where} needs a non-empty `path:`")
+    if not isinstance(row.get("why"), str) or not row["why"].strip():
+        raise ConfigError(f"{where} ({row['path']}) needs a `why:`; an unexplained exemption reads as an oversight")
+    return row["path"], row["why"]
+
+
+def flagged_figures(text: str) -> list[str]:
+    """Every byte figure with a budget word within `CLAIM_WINDOW` characters."""
+    return [m.group(1) for m in _BYTE_FIGURE.finditer(text)
+            if _BUDGET_WORDS.search(text[max(0, m.start() - CLAIM_WINDOW):m.start()]) or _BUDGET_WORDS.search(text[m.end():m.end() + CLAIM_WINDOW])]
+
+
+def find_budget_claim_problems(documents: list[str], budgets: dict, read) -> list[str]:
+    """`documents` is the swept population; `read(rel)` returns a file's text,
+    or None when the file is not there. A declared document is checked whether
+    or not the population holds it, so a declaration cannot pass by naming a
+    file the sweep skips. A kit claim (`KIT_BUDGET_CLAIMS`) whose document or
+    sentence is absent checks nothing and leaves the document to the sweep."""
+    failures: list[str] = []
+    declared = set(KIT_PROSE_EXEMPT) | set(budgets["budget_prose_exempt"])
+    for claim in budgets["budget_claims"] + _kit_claims(budgets):
+        doc, budget = claim["in"], claim["budget"]
+        text = read(doc)
+        if text is None:
+            if not claim["kit"]:
+                failures.append(f"{doc}: a budget_claims row names it, and this working tree has no such file.")
+            continue
+        rendered = claim["says"].replace("{budget}", f"{budget:,}")
+        skeleton = rf"({_FIGURE})".join(re.escape(part) for part in claim["says"].split("{budget}"))
+        hit = None if rendered in text else re.search(skeleton, text, re.IGNORECASE)
+        if rendered in text:
+            declared.add(doc)
+        elif hit:
+            declared.add(doc)
+            failures.append(f"{doc}: quotes {hit.group(1)} b for {claim['about']}; doc_budgets.yaml says {budget:,} b. Fix the document; budgets only go down.")
+        elif not claim["kit"]:
+            declared.add(doc)
+            failures.append(f"{doc}: no sentence reads {rendered!r}. It was reworded or deleted, so its budget_claims row checks nothing: restore it, update `says:`, or drop the row.")
+    for rel in sorted(set(documents) - declared):
+        figures = flagged_figures(read(rel) or "")
+        if figures:
+            failures.append(
+                f"{rel}: states {', '.join(f + ' b' for f in figures)} beside a budget word, and no budget_claims row covers it. "
+                "Declare the claim in doc_budgets.yaml, reword it, or exempt the document with a `why:` if its figures are not budget claims."
+            )
+    for rel, why in sorted(budgets["budget_prose_exempt"].items()):
+        text = read(rel)
+        if text is None:
+            failures.append(f"{rel}: exempted in budget_prose_exempt, and this working tree has no such file. Drop the row.")
+        elif not flagged_figures(text):
+            failures.append(f"{rel}: exempted in budget_prose_exempt, and the sweep would not flag it. An exemption covering nothing is dead config; drop the row.")
+    return failures
+
+
+def check_budget_claims(files: list[str], budgets: dict) -> list[str]:
+    def read(rel: str) -> str | None:
+        path = ROOT / rel
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
+    return find_budget_claim_problems(sorted(assign(files, budgets)), budgets, read)
+
+
 # --- kb ----------------------------------------------------------------------
 
 KB_HEADER = """# Knowledge Base
@@ -389,7 +605,7 @@ replace it. No PII in any entry.
 Every entry opens with the frontmatter block — `title`, `topic`, `keywords`,
 `kind` (probe | decision | reference), `retrieved` (YYYY-MM-DD), `status`
 (current | superseded) — and **this index is rendered from that frontmatter by
-`python scripts/check_docs.py --write-kb` and is never hand-edited.** A row
+`<venv python> scripts/check_docs.py --write-kb` and is never hand-edited.** A row
 typed in here is overwritten; write the frontmatter instead.
 
 `retrieved:` on a **probe** is the date the outside surface was observed and
@@ -464,7 +680,7 @@ def check_kb(write: bool) -> list[str]:
         print(f"wrote {KB_INDEX} ({len(found)} entries)")
         return []
     diff = list(difflib.unified_diff((current or "").splitlines(), rendered.splitlines(), "README.md (on disk)", "README.md (from frontmatter)", lineterm="", n=1))
-    return [f"{KB_INDEX} disagrees with the entry frontmatter; run `python scripts/check_docs.py --write-kb`.\n      " + "\n      ".join(diff[:40])]
+    return [f"{KB_INDEX} disagrees with the entry frontmatter; run `<venv python> scripts/check_docs.py --write-kb`.\n      " + "\n      ".join(diff[:40])]
 
 
 # --- memory ------------------------------------------------------------------
@@ -855,8 +1071,9 @@ def main(argv: list[str]) -> int:
     setup_failures = check_setup(files)
     trip_failures, trip_notes = check_trips()
     notes += trip_notes
+    claim_failures = check_budget_claims(files, budgets)
 
-    sections = (("BUDGET", budget_failures), ("ORPHANS", orphan_failures), ("KB", kb_problems), ("MEMORY", memory_failures), ("INTAKE", intake_failures), ("SETUP", setup_failures), ("TRIPS", trip_failures))
+    sections = (("BUDGET", budget_failures), ("ORPHANS", orphan_failures), ("KB", kb_problems), ("MEMORY", memory_failures), ("INTAKE", intake_failures), ("SETUP", setup_failures), ("TRIPS", trip_failures), ("CLAIMS", claim_failures))
     total = sum(len(f) for _, f in sections)
     for line in notes:
         print(line)
@@ -866,7 +1083,7 @@ def main(argv: list[str]) -> int:
             for f in failures:
                 print(f"  [{label}] {f}", file=sys.stderr)
         return 1
-    print(f"OK - {len(assign(files, budgets))} document(s) classified and within budget; kb index current; memory folder clean; intake cells in form; no setup marker left; trip files in form.")
+    print(f"OK - {len(assign(files, budgets))} document(s) classified and within budget; kb index current; memory folder clean; intake cells in form; no setup marker left; trip files in form; budget claims current.")
     return 0
 
 
