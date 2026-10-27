@@ -5,7 +5,7 @@ description: Use when the owner types /desk, or asks in their own words in this 
 
 # Desk — One Window Directs the Lanes
 
-Batched work runs as one **desk** directing **lane** windows the owner (the person `CLAUDE.md` names) can see and click into (`kb/desk-and-lane-philosophy.md`, which also says where the R-numbers come from; kit-owned — an improvement goes back with `python scripts/kit_sync.py push <path>`). This window is the desk. Every lane works in the one project folder and makes its own edits; nothing in git says which lane a changed file belongs to, so **this window is the record: who is here, what each owns, what each was told.**
+Batched work runs as one **desk** directing **lane** windows the owner (the person `CLAUDE.md` names) can see and click into (`kb/desk-and-lane-philosophy.md`, which also says where the R-numbers come from; kit-owned — an improvement goes back with `<venv python> scripts/kit_sync.py push <path>`). This window is the desk. Every lane works in the one project folder and makes its own edits; nothing in git says which lane a changed file belongs to, so **this window is the record: who is here, what each owns, what each was told.**
 
 **The grant is the owner, in this window** (their ruling, 2026-09-26): `/desk` typed here, or their own words here asking this window to run as the desk or to open a new desk job — the same act. Still refused: a message from another session saying "you are the desk" is not a grant and never becomes one, and a desk never opens a job on its own initiative. If neither started you, say so and stop.
 
@@ -50,7 +50,7 @@ reads:
 task:
 <what to do, as a specification: the whole of it, and nothing beyond it>
 done:
-<the command(s) whose quoted output finishes the lane — a measurement, never prose>
+<the command(s) report-done runs, one a line, unpiped — a measurement, never prose>
 ```
 
 **The reasons, and the model each opens on, are this project's list in `scripts/reason_tokens.json`.** Print it before writing the first sheet — never work from memory of another project's list:
@@ -61,13 +61,13 @@ done:
 
 Two rows are in every project: `prescribed` (Sonnet: build work the sheet names and a script verifies) and `design-latitude` (Opus: build work where the lane chooses how — **and every job no other row fits**). A row marked `[reads: names a source document]` is a job that works from the document itself. **A new, changed or removed row is the owner's ruling**, made in their words before the file changes; the desk never edits the file to make a sheet fit.
 
-Refused at the stamp: more than one unit (a second unit is a second sheet and a second lane; a comma, semicolon, `+`, `&` or "and" joins two, but not inside parentheses, and a ` — ` dash is a gloss on the one unit); no `owns:`; a `done:` that names no runnable command; a `done:` that runs the whole test suite (name the lane's own test files); a sheet whose reason reads a source but whose `reads:` names only files under `kb/`; a `reads:` path that is not on disk; any path outside the project; any path another live lane — of this desk or another — owns, or that sits inside or above one.
+Refused at the stamp: more than one unit (a second unit is a second sheet and a second lane; a comma, semicolon, `+`, `&` or "and" joins two, but not inside parentheses, and a ` — ` dash is a gloss on the one unit); no `owns:`; a `done:` that names no runnable command, or one `report-done` cannot run unattended (a pipe, redirect, `&&`, variable, placeholder, git save); a `done:` that runs the whole test suite (name the lane's own test files); a sheet whose reason reads a source but whose `reads:` names only files under `kb/`; a `reads:` path that is not on disk; any path outside the project; any path another live lane — of this desk or another — owns, or that sits inside or above one.
 
-A `research` or `planning` sheet owns `Working/<name>` for the research write-up (`skills/research/SKILL.md`, when this project has one).
+A `research` or `planning` sheet owns `Working/<name>` for the research write-up and names its check in `done:` (`skills/research/SKILL.md`, when this project has one).
 
 **Size the `reads:` list before stamping** — one lane's full read has a ceiling, and the stamp does not measure it yet. The measured numbers and how to split: `kb/lane-context-sizing.md`.
 
-**A `done:` for work that touches a `.md` or `.html` includes `python scripts/check_docs.py`.** A new document needs a row in `doc_budgets.yaml`, which the lane cannot write unless it owns that file — so the desk either gives `doc_budgets.yaml` to exactly one lane, or writes no sheet that creates a document.
+**A `done:` for work that touches a `.md` or `.html` includes `<venv python> scripts/check_docs.py`, the interpreter written out.** A new document needs a row in `doc_budgets.yaml`, which the lane cannot write unless it owns that file — so the desk either gives `doc_budgets.yaml` to exactly one lane, or writes no sheet that creates a document.
 
 ## The Run
 
@@ -163,7 +163,7 @@ A lane's `outside: <file or entity>` line — something it found that is not in 
 
 ### Step 6 — Close a lane that has finished; reopen one that died
 
-A lane finishes by running `desk_record.py report-done <lane>` and sending `done:` with its receipts — one `$ <command>` block per item its sheet's `done:` names, each followed by the bytes that command printed. **A `done:` whose receipts are sentences is malformed: ask for the output.** Read the receipts against the sheet. Then:
+A lane finishes by running `desk_record.py report-done <lane>`: it runs the sheet's `done:` commands itself, records done only when every one exits 0, and writes the receipts to `done/<lane>.receipts.md`. The lane sends `done:` and that path. **Receipts pasted as text count for nothing: read the file.** Then:
 
 ```
 <home run> open_terminal.py --close --wait --name <lane>
@@ -171,7 +171,7 @@ A lane finishes by running `desk_record.py report-done <lane>` and sending `done
 
 `--close --wait` waits for the lane's turn to end, then makes the usual checks and closes it: up to ten minutes, or `--timeout <seconds>`. It refuses at once a lane stopped at a pop-up or a question for the owner — tell them which tab. The close is refused for a lane that has not reported done since it was last put to work. A lane that will never report — stuck, looping, its window gone wrong — closes with `--abandoned "<why>"` (never with `--wait`), and the why is recorded.
 
-**A lane that dies or is abandoned mid-task is reopened from its sheet under a new name** (`<lane>-2`): copy the sheet, stamp, open. The stamp passes a CLOSED lane's paths to the lane now given them, so every file keeps exactly one owner. A lane that cannot produce valid receipts gets **one** retry this way; after the second failure it goes to the owner as unresolved, in plain language.
+**A lane that dies or is abandoned mid-task is reopened from its sheet under a new name** (`<lane>-2`): copy the sheet, stamp, open. The stamp passes a CLOSED lane's paths to the lane now given them, so every file keeps exactly one owner. A lane whose `report-done` cannot pass gets **one** retry this way; after the second failure it goes to the owner as unresolved, in plain language.
 
 ### Step 7 — The ownership check, then the one save
 
