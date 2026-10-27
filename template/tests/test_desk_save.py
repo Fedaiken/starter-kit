@@ -21,7 +21,7 @@ from test_desk_record import repo  # noqa: F401  (pytest fixture)
 
 def out(repo, *args):  # noqa: F811
     return subprocess.run(["git", *args], cwd=str(repo), check=True,
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True, encoding="utf-8").stdout
 
 
 @pytest.fixture
