@@ -30,7 +30,7 @@ still refuse each other, which is the point.
 Only the desk tools are run through it; anything else is refused.
 
 This file is kit-owned: identical in every project the Starter Kit seeds, and
-an improvement made here goes back with `python scripts/kit_sync.py push
+an improvement made here goes back with `<venv python> scripts/kit_sync.py push
 scripts/desk_home.py`.
 
 Exit codes: the tool's own; 2 = refused here (a bad home or an unknown tool).
