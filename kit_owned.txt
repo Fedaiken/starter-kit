@@ -21,6 +21,7 @@ scripts/lane_guard.py
 scripts/note_prompt.py
 scripts/agent_guard.py
 scripts/check_skill_commands.py
+scripts/extract_pdf.py
 skills/desk/SKILL.md
 skills/lane/SKILL.md
 
