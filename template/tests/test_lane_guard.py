@@ -441,9 +441,15 @@ def test_the_refusals_name_no_project():
 
 
 def test_main_refuses_a_write_with_no_role_with_exit_2(monkeypatch, capsys):
+    """From a stand-in project outside a stand-in temp folder: the kit tests a
+    seeded project by seeding it into a scratchpad, where a write is allowed,
+    so the real working folder would pass there for the wrong reason."""
+    project = str(Path.home() / "stand-in-project")       # read as a path, never created
     monkeypatch.delenv(pi.ROLE_ENV, raising=False)
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(Path.cwd()))
-    payload = {**shell("Set-Content x.md y", "PowerShell"), "cwd": str(Path.cwd())}
+    for var in lg.TEMP_VARS:
+        monkeypatch.setenv(var, str(Path.home() / "stand-in-temp"))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", project)
+    payload = {**shell("Set-Content x.md y", "PowerShell"), "cwd": project}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     assert lg.main() == 2
     assert "REFUSED in this window" in capsys.readouterr().err
