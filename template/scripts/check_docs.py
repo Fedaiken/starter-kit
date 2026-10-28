@@ -99,6 +99,32 @@ THE CHECKS
    measurement: a scan for figures EQUAL to a budget cannot see a stale one by
    construction, and budget-word proximity alone was 57% precise (hypotheticals,
    other caps, dated history), so the sweep only asks for a declaration.
+9. SOURCES. A `kb/*.md` line (frontmatter included; fenced code and the
+   generated index not) that cites a search or summary tool as where a fact
+   came from fails unless the same line also cites the page read: an
+   `http(s)://` URL that is not itself a search or answer page, with a
+   `retrieved: YYYY-MM-DD` date. A search result, an answer engine's reply and
+   a fetch tool's output are a model's summary of pages, not a page; recorded
+   as a source, they put claims in the record that no page made. The rule the
+   URL stands for: search finds the URL, and a browser reads the page (or the
+   source's own raw feed is read). The gate cannot prove a page was read, only
+   that one is named. A path to a saved copy does not count: saved copies live
+   in gitignored scratch, so the path is dead in git and on every other
+   machine. Added 2026-10-27: a
+   kb entry cited a developer's news post "via search" for a change the post,
+   read raw, never mentions. Recognition
+   is by citation grammar, not by the tool's name, because a name list flags
+   every line that explains the rule, and a rule nobody can write down without
+   failing gets exempted. The name (search, web search, WebSearch, WebFetch,
+   the fetch tool, Perplexity, an AI overview, and their result, snippet and
+   summary forms) counts only after a sourcing word (via, by, from, per,
+   according to, through, source:), alone at the head of a parenthesis
+   ("(Perplexity, <date>)"), within a short clause of an ISO date, or as the
+   subject of a reporting verb ("the search found", "the search's reading").
+   So prose about search, such as "a search result is not a page", passes as
+   written; a rule that must name the forbidden words quotes the whole phrase
+   in backticks, which marks a mention. A phrase only partly in backticks
+   (via `WebSearch`) is still a citation.
 
 Every YAML this gate reads (`doc_budgets.yaml`, kb and memory frontmatter)
 goes through `strict_load`, which refuses a repeated mapping key. `safe_load`
@@ -683,6 +709,58 @@ def check_kb(write: bool) -> list[str]:
     return [f"{KB_INDEX} disagrees with the entry frontmatter; run `<venv python> scripts/check_docs.py --write-kb`.\n      " + "\n      ".join(diff[:40])]
 
 
+# --- sources -----------------------------------------------------------------
+
+# Longer names first, so `web search results` is read whole rather than as `web`.
+_SEARCH_TOOL = (
+    r"(?:web[ _-]?search(?:es)?|WebFetch|web_fetch|fetch[ _-]tool|Perplexity|AI (?:overview|summary|answer)s?"
+    r"|search(?:es)?(?: (?:results?|snippets?|summar(?:y|ies)|engines?))?)"
+)
+_SEARCH_MODIFIERS = r"(?:(?:a|an|the|one|my|our|some|this|that|several|quick|online|web|Google|Bing|DuckDuckGo|Perplexity)\s+){0,3}"
+_SEARCH_CITATIONS = tuple(re.compile(p, re.IGNORECASE) for p in (
+    rf"\b(?:via|by|from|per|according to|through|sources?:|cited:)\s+{_SEARCH_MODIFIERS}{_SEARCH_TOOL}\b",
+    rf"\(\s*{_SEARCH_TOOL}\s*[,;)]",
+    rf"\b{_SEARCH_TOOL}\b[^.;()\n]{{0,25}}?\b\d{{4}}-\d{{2}}-\d{{2}}",
+    rf"\b{_SEARCH_TOOL}(?:\s+(?:says|said|shows|showed|reports|reported|found|returned|states|stated|confirms|confirmed)\b|(?:'s|’s)\s+(?:reading|summary|answer)\b)",
+))
+_PAGE_URL = re.compile(r"https?://[^\s`)>\]]+", re.IGNORECASE)
+_SEARCH_URL = re.compile(r"perplexity\.ai|google\.[a-z.]+/search|bing\.com/search|duckduckgo\.com/\?", re.IGNORECASE)
+_RETRIEVED = re.compile(r"\bretrieved:\s*\d{4}-\d{2}-\d{2}\b", re.IGNORECASE)
+
+
+def _cites_page(line: str) -> bool:
+    """A URL that is not a search or answer page, and a `retrieved:` date beside it."""
+    return bool(_RETRIEVED.search(line)) and any(not _SEARCH_URL.search(u) for u in _PAGE_URL.findall(line))
+
+
+def find_search_citations(rel: str, text: str) -> list[str]:
+    """Each line citing a search or summary tool as a source with no page on it.
+    A match lying wholly inside one backticked span is a mention and passes."""
+    failures: list[str] = []
+    fenced = False
+    for n, line in enumerate(text.replace("\r\n", "\n").split("\n"), start=1):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced or _cites_page(line):
+            continue
+        quoted = [(m.start(), m.end()) for m in _BACKTICKED.finditer(line)]
+        scan = line.replace("`", " ")  # same offsets, so `quoted` still lines up
+        hits = [m for p in _SEARCH_CITATIONS for m in p.finditer(scan)
+                if not any(s <= m.start() and m.end() <= e for s, e in quoted)]
+        if hits:
+            phrase = min(hits, key=lambda m: m.start()).group(0).strip()
+            failures.append(
+                f"{rel}:{n}: cites {phrase!r} as a source, and the line names no page read. A search or summary is not a page: "
+                "read the page itself and cite its URL with `retrieved: <date>` on this line. If the line is about search rather than citing it, put the phrase in backticks."
+            )
+    return failures
+
+
+def check_sources() -> list[str]:
+    return [f for path, _, _ in kb_entries() for f in find_search_citations(f"kb/{path.name}", path.read_text(encoding="utf-8"))]
+
+
 # --- memory ------------------------------------------------------------------
 
 
@@ -1072,8 +1150,9 @@ def main(argv: list[str]) -> int:
     trip_failures, trip_notes = check_trips()
     notes += trip_notes
     claim_failures = check_budget_claims(files, budgets)
+    source_failures = check_sources()
 
-    sections = (("BUDGET", budget_failures), ("ORPHANS", orphan_failures), ("KB", kb_problems), ("MEMORY", memory_failures), ("INTAKE", intake_failures), ("SETUP", setup_failures), ("TRIPS", trip_failures), ("CLAIMS", claim_failures))
+    sections = (("BUDGET", budget_failures), ("ORPHANS", orphan_failures), ("KB", kb_problems), ("MEMORY", memory_failures), ("INTAKE", intake_failures), ("SETUP", setup_failures), ("TRIPS", trip_failures), ("CLAIMS", claim_failures), ("SOURCES", source_failures))
     total = sum(len(f) for _, f in sections)
     for line in notes:
         print(line)
@@ -1083,7 +1162,7 @@ def main(argv: list[str]) -> int:
             for f in failures:
                 print(f"  [{label}] {f}", file=sys.stderr)
         return 1
-    print(f"OK - {len(assign(files, budgets))} document(s) classified and within budget; kb index current; memory folder clean; intake cells in form; no setup marker left; trip files in form; budget claims current.")
+    print(f"OK - {len(assign(files, budgets))} document(s) classified and within budget; kb index current; memory folder clean; intake cells in form; no setup marker left; trip files in form; budget claims current; no search cited as a source.")
     return 0
 
 
