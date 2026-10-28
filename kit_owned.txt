@@ -45,6 +45,7 @@ tests/test_console_encoding.py
 tests/test_agent_guard.py
 tests/test_check_skill_commands.py
 tests/test_extract_pdf.py
+tests/conftest.py
 
 # The method
 kb/cardinal-rule-solve-through-structure.md
