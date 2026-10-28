@@ -40,6 +40,7 @@ tests/test_check_docs_yaml.py
 tests/test_subprocess_encoding.py
 tests/test_interpreter_references.py
 tests/test_console_encoding.py
+tests/test_agent_guard.py
 
 # The method
 kb/cardinal-rule-solve-through-structure.md
