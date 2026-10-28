@@ -23,6 +23,7 @@ scripts/agent_guard.py
 scripts/check_skill_commands.py
 scripts/extract_pdf.py
 scripts/githooks/pre-commit
+scripts/fetch_page.py
 skills/desk/SKILL.md
 skills/lane/SKILL.md
 
