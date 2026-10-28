@@ -23,8 +23,10 @@ SEEDING
 Copies template/ into <parent>/<Name>, fills every {{KIT:...}} marker from the
 profile and this machine, writes .claude/settings.json for this OS (hook paths
 differ: .venv/Scripts/python.exe on Windows, .venv/bin/python elsewhere),
-builds .venv and runs the test suite in it, runs `git init` with the profile's
-identity, writes .kit.json, and runs the gate. The gate FAILS on purpose: every
+builds .venv (with Playwright and its Chromium, for scripts/fetch_page.py) and
+runs the test suite in it, runs `git init` with the profile's identity and
+core.hooksPath set to scripts/githooks, writes .kit.json, and runs the gate.
+The settings deny WebFetch: it returns a summary of a page, not the page. The gate FAILS on purpose: every
 {{FILL:...}} marker is a section the setup interview still owes. It does not
 commit or create a remote; START_HERE.md does both once the gate passes.
 
@@ -54,7 +56,15 @@ OWNED_LIST = KIT / "kit_owned.txt"
 PROFILE = Path.home() / ".starter-kit" / "profile.json"
 IS_WINDOWS = os.name == "nt"
 VENV_PYTHON = ".venv/Scripts/python.exe" if IS_WINDOWS else ".venv/bin/python"
-VENV_PACKAGES = ("pytest", "pyyaml", "pypdf", "pypdfium2", "pillow")
+VENV_PACKAGES = ("pytest", "pyyaml", "pypdf", "pypdfium2", "pillow", "playwright==1.64.0")
+# scripts/fetch_page.py drives this browser; pip installs Playwright, not the browser.
+BROWSER_INSTALL = ("-m", "playwright", "install", "chromium")
+if IS_WINDOWS:
+    BROWSER_HOME = r"%LOCALAPPDATA%\ms-playwright"
+elif sys.platform == "darwin":
+    BROWSER_HOME = "~/Library/Caches/ms-playwright"
+else:
+    BROWSER_HOME = "~/.cache/ms-playwright"
 # Stored under another name so git in the kit repo tracks it: the template's
 # .gitignore would otherwise apply to the kit itself.
 RENAMES = {"_gitignore": ".gitignore"}
@@ -144,9 +154,16 @@ def platform_block(facts: dict, prof: dict, remote: str) -> str:
     missing = ", ".join(e for e, ok in found.items() if not ok)
     build = (f"{Path(sys.executable).name} -m venv .venv; {VENV_PYTHON} -m pip install {' '.join(VENV_PACKAGES)}"
              if IS_WINDOWS else f"python3 -m venv .venv && {VENV_PYTHON} -m pip install {' '.join(VENV_PACKAGES)}")
+    browser = f"{VENV_PYTHON} {' '.join(BROWSER_INSTALL)}"
+    extract = f"Run `{VENV_PYTHON} scripts/extract_pdf.py IN.pdf -o <scratchpad>/IN.md` and Read the `.md`: every page opens with a `<!-- page N -->` marker to cite. `--pages 3-9` for a range, `--toc` for each page's first line."
     pdf_row = ("**The Read tool cannot open a PDF on this machine** (it needs poppler, which is not installed). "
-               "Use `pypdf` from a short script writing text to the scratchpad, or the `anthropic-skills:pdf` skill."
-               if not found.get("pdftoppm") else "Read directly, or `pypdf` for text extraction.")
+               f"{extract} Merging, splitting, OCR: the `anthropic-skills:pdf` skill."
+               if not found.get("pdftoppm") else f"Read directly, or, for text to grep and cite by page: {extract}")
+    page_row = (f"`{VENV_PYTHON} scripts/fetch_page.py <url> Working/<lane>/<name>.html` loads it in headless Chromium and saves what the browser renders, "
+                "plus `<name>.txt` (title, final URL, visible text: grep that one). **Use it, not curl or the fetch tool, for any page you cite:** "
+                "a page built in JavaScript comes back from those as a shell or a summary, not its real text, and the fetch tool is denied in this project's settings. "
+                "It obeys the site's robots.txt with no override, and refuses to save a bot check or an empty page. "
+                "Exit 0 saved · 1 blocked or empty · 2 usage · 3 did not load, or Playwright or its browser is missing · 4 robots.txt disallows it · 5 robots.txt unreadable.")
     docx_row = "`pandoc -t markdown --wrap=none IN.docx -o OUT.md`" if found.get("pandoc") else "pandoc is not installed; install it, or `python-docx` in the venv"
     lines = [
         "## Platform",
@@ -162,7 +179,12 @@ def platform_block(facts: dict, prof: dict, remote: str) -> str:
         "",
         "```",
         build,
+        browser,
         "```",
+        "",
+        f"The second line downloads the browser that Playwright version drives into `{BROWSER_HOME}`, outside the project and shared by every venv "
+        "pinning the same Playwright version (for 1.64.0: `chromium-1248` and `chromium_headless_shell-1248`, observed 2026-10-27). "
+        "If those folders are already there, skip it. Without the package or the browser, `scripts/fetch_page.py` exits 3 and prints the commands to run.",
         "",
         f"Tests: `{VENV_PYTHON} -m pytest tests -q`.",
         "",
@@ -173,9 +195,10 @@ def platform_block(facts: dict, prof: dict, remote: str) -> str:
         f"| `.docx` | {docx_row} |",
         f"| `.pdf` | {pdf_row} |",
         "| PDF checkboxes and scans | **Text extraction drops checkbox state.** Render the page with `pypdfium2`: `pdfium.PdfDocument(path)[i].render(scale=1.6).to_pil().save(png)`, then Read the PNG. A scan with no text layer needs OCR. |",
+        f"| A web page (a URL) | {page_row} |",
         "| `.png`, `.jpg`, `.csv`, `.md`, `.txt` | Read directly. |",
         "",
-        "Reading copies go to the session scratchpad, never into the repo.",
+        "Reading copies go to the session scratchpad (a saved web page, to `Working/`), never into tracked files.",
         "",
         "## Git",
         "",
@@ -206,12 +229,18 @@ def settings(prof: dict) -> tuple[dict, dict | None]:
 
     git_writes = [f"{s}(git {c})" for s in shells for c in ("add *", "commit *", "push origin main", "push origin HEAD*")]
     venv_runs = [f"{s}({p} *)" for s in shells for p in (VENV_PYTHON, "./" + VENV_PYTHON)]
-    deny = [f"{s}({c})" for s in shells for c in ("git push --force*", "git push -f*", "git stash*")] + ["Bash(rm -rf /*)", "Bash(sudo rm:*)"]
+    # WebFetch is denied, never allowed: it hands back a model's summary of a page, not
+    # the page, and a figure it leaves out reads as "the page does not say".
+    # scripts/fetch_page.py saves what the browser renders instead.
+    deny = ([f"{s}({c})" for s in shells for c in ("git push --force*", "git push -f*", "git stash*")]
+            + ["Bash(rm -rf /*)", "Bash(sudo rm:*)", "WebFetch"])
     ask = [f"{s}(git {c}*)" for s in shells for c in ("reset", "clean", "checkout", "restore", "rebase", "merge", "branch -D")]
+    perplexity = [f"mcp__perplexity__perplexity_{t}" for t in ("search", "ask", "research", "reason")]
     if prof["permissions"] == "broad":
-        allow = [*shells, "Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit", "WebSearch", "WebFetch",
+        allow = [*shells, "Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit", "WebSearch",
                  "Artifact", "SendMessage", "ListAgents", "Monitor", "Skill(loop)", "Skill(schedule)",
-                 "Skill(schedule:*)", "Skill(update-config)", "Skill(artifact-design)", *venv_runs, *git_writes]
+                 "Skill(schedule:*)", "Skill(update-config)", "Skill(artifact-design)", *perplexity,
+                 "Read(~/.claude/uploads/**)", *venv_runs, *git_writes]
     else:
         # The desk talks to its lanes through these two; without them every
         # message is a prompt, and a desk waiting on a prompt looks like a desk thinking.
@@ -222,14 +251,15 @@ def settings(prof: dict) -> tuple[dict, dict | None]:
         "hooks": {
             "PermissionRequest": [{"matcher": "*", "hooks": [hook("note_prompt.py")]}],
             "PermissionDenied": [{"matcher": "*", "hooks": [hook("note_prompt.py")]}],
-            "PreToolUse": [{"matcher": "|".join(shells), "hooks": [hook("lane_guard.py")]}],
+            "PreToolUse": [{"matcher": "|".join(shells), "hooks": [hook("lane_guard.py")]},
+                           {"matcher": "Agent|Workflow", "hooks": [hook("agent_guard.py")]}],
         },
     }
     if prof["permissions"] != "broad":
         return main, None
     local = {"permissions": {
-        "allow": [f"{s}(*)" for s in shells] + ["Read(*)", "Write(*)", "Edit(*)", "NotebookEdit(*)", "WebSearch", "WebFetch(*)", "Artifact", "Skill(update-config)", "Skill(loop)"],
-        "deny": ["Bash(rm -rf /*)", "Bash(sudo rm:*)"],
+        "allow": [f"{s}(*)" for s in shells] + ["Read(*)", "Write(*)", "Edit(*)", "NotebookEdit(*)", "WebSearch", "Artifact", "Skill(update-config)", "Skill(loop)"],
+        "deny": ["Bash(rm -rf /*)", "Bash(sudo rm:*)", "WebFetch"],
         "additionalDirectories": [str(Path.home() / ".claude")],
     }}
     return main, local
@@ -319,10 +349,16 @@ def cmd_seed(args) -> int:
     if local_settings:
         (target / ".claude" / "settings.local.json").write_text(json.dumps(local_settings, indent=2) + "\n", encoding="utf-8")
 
-    for argv in (["init", "-b", "main"], ["config", "user.name", prof["name"]], ["config", "user.email", prof["email"]]):
+    for argv in (["init", "-b", "main"], ["config", "user.name", prof["name"]], ["config", "user.email", prof["email"]],
+                 ["config", "core.hooksPath", "scripts/githooks"]):
         run(["git", *argv], target).check_returncode()
     if IS_WINDOWS:
         run(["git", "config", "core.autocrlf", "true"], target)
+    else:
+        # git skips a hook that is not executable, with only a hint; the copy above dropped the bit.
+        hook_file = target / "scripts" / "githooks" / "pre-commit"
+        if hook_file.is_file():
+            hook_file.chmod(hook_file.stat().st_mode | 0o111)
 
     sync = import_sync_module(target)
     record = {
@@ -345,7 +381,8 @@ def cmd_seed(args) -> int:
         print("venv: SKIPPED (--no-venv). The hooks in .claude/settings.json fail on every shell call until it exists.")
         venv_ok = False
     else:
-        steps = [[sys.executable, "-m", "venv", ".venv"], [VENV_PYTHON, "-m", "pip", "install", "-q", *VENV_PACKAGES]]
+        steps = [[sys.executable, "-m", "venv", ".venv"], [VENV_PYTHON, "-m", "pip", "install", "-q", *VENV_PACKAGES],
+                 [VENV_PYTHON, *BROWSER_INSTALL]]
         for step in steps:
             done = run([str(target / step[0]) if step[0] == VENV_PYTHON else step[0], *step[1:]], target)
             if done.returncode != 0:

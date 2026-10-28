@@ -1,7 +1,7 @@
 ---
 title:     Platform and Tools — This Machine, the venv, Reading Documents, git
 topic:     "What was on this machine at setup and how the project uses it: the OS and shell, the project venv the gate and hooks run in and its rebuild line, how each document format is read, and the git remote. Written by the Starter Kit's seeder from what it found."
-keywords:  [platform, OS, shell, PowerShell, bash, python, venv, .venv, venv python, rebuild, hooks, pytest, PyYAML, pypdf, pypdfium2, PDF, poppler, Read tool, pandoc, docx, git, remote, commit -F, scratchpad, file naming]
+keywords:  [platform, OS, shell, PowerShell, bash, python, venv, .venv, venv python, rebuild, hooks, pytest, PyYAML, pypdf, pypdfium2, PDF, extract_pdf, poppler, Read tool, pandoc, docx, web page, URL, fetch_page, Playwright, Chromium, ms-playwright, robots.txt, fetch tool, git, remote, commit -F, scratchpad, file naming]
 kind:      reference
 retrieved: {{KIT:DATE}}
 status:    current

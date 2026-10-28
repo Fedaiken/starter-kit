@@ -52,7 +52,7 @@ Every routed file also gets:
 | Work queue (**the program counter**) | `Get-ChildItem Inbox -File` plus `Inbox/*/` excluding `_Scratch`, `_Held`, `_Manifest.md` |
 | Decision ledger (append-only) | `Inbox/_Manifest.md` |
 | Extraction (.docx) | `pandoc -t markdown --wrap=none IN.docx -o <scratchpad>/OUT.md` |
-| Extraction (.pdf) | `pypdf` — a short `python -c` script writing text to the scratchpad, or the `anthropic-skills:pdf` skill. **The Read tool cannot open a PDF on this machine.** |
+| Extraction (.pdf) | `pypdf` — a short `<venv python> -c` script writing text to the scratchpad, or the `anthropic-skills:pdf` skill. **The Read tool cannot open a PDF on this machine.** |
 | Reading copies (transient) | the session scratchpad — never committed |
 | Processed originals | `Archive/Inbox_Processed/<YYYY-MM-DD>_<slug>/<filename>` |
 | Held files | `Inbox/_Held/<filename>` |
