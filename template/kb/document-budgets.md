@@ -1,7 +1,7 @@
 ---
 title:     Document Budgets — Why Every Document Has a Ceiling From Day One
-topic:     "Why a new project budgets its documents before it has any: the tiers, the gate's six checks, budgets only go down, headroom is the deliverable, and the test for whether a sentence may be cut. Distilled from Fantasy_Football and the HAZELHURST scaffold."
-keywords:  [doc_budgets.yaml, check_docs.py, byte budget, tier 1, tier 2, tier 3, orphan, headroom, 5% band, budgets only go down, ratchet, trim not raise, CLAUDE.md bloat, pointer index, rationale routing, memory cap, kb frontmatter, generated index, setup marker]
+topic:     "Why a new project budgets its documents before it has any: the tiers, the gate's nine checks, budgets only go down, headroom is the deliverable, and the test for whether a sentence may be cut. Distilled from Fantasy_Football and the HAZELHURST scaffold."
+keywords:  [doc_budgets.yaml, check_docs.py, byte budget, tier 1, tier 2, tier 3, orphan, headroom, 5% band, budgets only go down, ratchet, trim not raise, CLAUDE.md bloat, pointer index, rationale routing, memory cap, kb frontmatter, generated index, setup marker, trip files, budget claims, search citation, retrieved date]
 kind:      decision
 retrieved: 2026-09-24
 status:    current
@@ -34,6 +34,9 @@ Tier 4 is why the orphan check exists. A document nobody points at looks current
 4. **MEMORY.** Each auto-memory entry is at most 2,000 b, has its frontmatter, and has a pointer line in `MEMORY.md` of at most 220 b; the index stays under 140 lines.
 5. **INTAKE.** Every Status cell in `Intake_Checklist.md` is a status word, a backticked pointer, and no figure. A cell that can only say "which document, who, where to read" cannot drift from the kb entry it points at.
 6. **SETUP.** No Starter Kit marker survives in any document.
+7. **TRIPS.** In each `Trips/<trip>/` folder, the itinerary, record and route files keep their form: every row has a start point, a way there and a status; every booked row names a section in the record; every quote names its speaker or source. The Trip Log's deadline cell holds one deadline. A project with no `Trips/` folder never meets this check.
+8. **CLAIMS.** A sentence that quotes a document's ceiling matches that document's row, declared under `budget_claims:`. A byte figure beside a budget word that no row declares fails until it is declared, reworded, or its document is exempted with a `why:`.
+9. **SOURCES.** A kb line that cites a search or summary tool as where a fact came from (`via search`, `(Perplexity, <date>)`) also cites the page read: its URL and a `retrieved:` date. A search result is a model's summary of pages, not a page. The gate can show that a page is named, not that it was read. Prose about search passes as written; a rule that quotes the forbidden words puts them in backticks.
 
 There is no `--fix`. Each failure prints the row's `rule:`, which says where the bytes go.
 
