@@ -1,9 +1,9 @@
 ---
 title:     The Starter Kit and Kit Sync — How Portable Improvements Travel
-topic:     "This project was seeded from the Starter Kit. Kit-owned files are shared with every project; kit_sync.py flags any that changed on either side, and close-session makes a decision on each: push to the kit, pull from it, or keep the local version."
-keywords:  [Starter Kit, kit_sync.py, .kit.json, kit-owned, seeded, push, pull, keep, adopt, drift, portable improvement, START_HERE, close-session, template, profile, STARTER_KIT, pull request, kit_url]
+topic:     "This project was seeded from the Starter Kit. Kit-owned files are shared with every project; kit_sync.py flags any that changed on either side, and close-session makes a decision on each: push to the kit, pull from it, or keep the local version. push --new adds a file the kit does not own yet, commit saves a hand edit to the kit's seeder or seeded files, and both run the kit's privacy check first."
+keywords:  [Starter Kit, kit_sync.py, .kit.json, kit-owned, seeded, push, push --new, pull, keep, commit, check_private, privacy check, adopt, drift, portable improvement, START_HERE, close-session, template, profile, STARTER_KIT, pull request, kit_url]
 kind:      decision
-retrieved: 2026-09-24
+retrieved: 2026-10-27
 status:    current
 ---
 
@@ -38,8 +38,15 @@ Each UNDECIDED file takes one decision:
 - `pull <path>` — the kit improved. Copies the kit's version here.
 - `keep <path>` — this project's difference is local. Records the current state so the file stops asking.
 
+Two more commands carry what `status` cannot see:
+
+- `push --new <path>` — a project file every project should get, which the kit does not own yet (a new test, a new tool). Copies it to `template/<path>`, adds it to `kit_owned.txt` beside the paths in its folder, records it, commits and pushes as `push` does. It refuses a path the kit already seeds: turning a seeded file into a kit-owned one overwrites every project's own copy, so that change is made in a session opened in the kit.
+- `commit <kit paths> -F <message file>` — the save for that kind of change: a hand edit to the kit's own files (its seeder, a seeded template file). Stages and commits only the named paths, then pushes the kit. It refuses a kit-owned template file, which travels by `push` so each project's record of it stays true.
+
+**Every push and every commit runs the kit's `scripts/check_private.py` first**, the check the kit's rules require before any commit to a public repo. Not OK, or no check in the kit, and nothing is committed: `push` puts back every file it copied or listed, so the kit is as it was found.
+
 `/close-session` runs `status` in its gate step, and a finding about a kit-owned file routes to the `kit` destination. A portable fix therefore reaches the kit the same session it is made, or is kept local on purpose. It is never forgotten.
 
 ## What is not synced
 
-Seeded files never are; a better skill shape or CLAUDE.md section found in one project is carried back by editing the kit's `template/` by hand, in a session opened in the kit.
+Seeded files never are; a better skill shape or CLAUDE.md section found in one project is carried back by editing the kit's `template/` by hand, and saved with `kit_sync.py commit`.
