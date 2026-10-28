@@ -814,21 +814,37 @@ def test_prose_in_a_done_block_is_not_read_for_placeholders(repo):
 
 PROJECT = Path(__file__).resolve().parents[1]
 
+#: Where desks write task sheets, live or archived: `coordination/desks/<home>/task_sheets/`,
+#: as the usage lines of desk_record.py and open_terminal.py spell it.
+SHEET_GLOB = "coordination/**/task_sheets/*.md"
 
-def test_every_sheet_on_file_would_run_under_the_done_shell():
+
+def test_every_sheet_on_file_would_run_under_the_done_shell(tmp_path):
     """Every task sheet any desk here has written, live or archived, run
     through `report-done`'s dry mode against this project: each command
     splits under the done shell, is not one the stamp refuses, and finds its
-    program."""
-    sheets = sorted(PROJECT.glob("coordination/**/task_sheets/*.md"))
-    failures = []
+    program.
+
+    A project no desk has run in yet (a freshly seeded one) has no sheet on
+    file. Then one is planted where a desk writes them, so the glob is still
+    proved to reach that layout and its `done:` line still runs against this
+    project; wherever a sheet is on file, only the real ones are read."""
+    sheets, where = sorted(PROJECT.glob(SHEET_GLOB)), PROJECT
+    if not sheets:
+        planted = tmp_path / "coordination" / "desks" / "first-job" / "task_sheets" / "lane-alpha.md"
+        planted.parent.mkdir(parents=True)
+        planted.write_text(SHEET.split("done:\n")[0] + f"done:\n{VENV} scripts/check_docs.py\n", encoding="utf-8")
+        sheets, where = sorted(tmp_path.glob(SHEET_GLOB)), tmp_path
+    failures, ran = [], 0
     for path in sheets:
         done = dr.parse_sheet(path.read_text(encoding="utf-8"))[0].get("done", "")
         for command in dr.done_commands(done):
+            ran += 1
             argv, why = dr.dry_run(command, PROJECT)
             if why or not Path(argv[0]).is_file():
-                failures.append(f"{path.relative_to(PROJECT).as_posix()}: {command[:80]} -- {why}")
+                failures.append(f"{path.relative_to(where).as_posix()}: {command[:80]} -- {why}")
     assert sheets, "no task sheet on file: the glob, not the sheets, is wrong"
+    assert ran, "no done: command read from any sheet: the parse, not the sheets, is wrong"
     assert failures == []
 
 
