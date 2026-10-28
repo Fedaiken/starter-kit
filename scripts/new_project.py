@@ -162,8 +162,8 @@ def platform_block(facts: dict, prof: dict, remote: str) -> str:
     page_row = (f"`{VENV_PYTHON} scripts/fetch_page.py <url> Working/<lane>/<name>.html` loads it in headless Chromium and saves what the browser renders, "
                 "plus `<name>.txt` (title, final URL, visible text: grep that one). **Use it, not curl or the fetch tool, for any page you cite:** "
                 "a page built in JavaScript comes back from those as a shell or a summary, not its real text, and the fetch tool is denied in this project's settings. "
-                "It obeys the site's robots.txt with no override, and refuses to save a bot check or an empty page. "
-                "Exit 0 saved · 1 blocked or empty · 2 usage · 3 did not load, or Playwright or its browser is missing · 4 robots.txt disallows it · 5 robots.txt unreadable.")
+                "It obeys the site's robots.txt with no override, and refuses to save a bot check, an empty page or a page still showing a loading placeholder. "
+                "Exit 0 saved · 1 blocked, empty or still loading · 2 usage · 3 did not load, or Playwright or its browser is missing · 4 robots.txt disallows it · 5 robots.txt unreadable.")
     docx_row = "`pandoc -t markdown --wrap=none IN.docx -o OUT.md`" if found.get("pandoc") else "pandoc is not installed; install it, or `python-docx` in the venv"
     lines = [
         "## Platform",
