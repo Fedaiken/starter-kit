@@ -33,6 +33,7 @@ tests/test_desk_save.py
 tests/test_lane_guard.py
 tests/test_note_prompt.py
 tests/test_kit_sync.py
+tests/test_settings_deny.py
 
 # The method
 kb/cardinal-rule-solve-through-structure.md
