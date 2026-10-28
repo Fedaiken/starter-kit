@@ -1,0 +1,32 @@
+#!/bin/sh
+# Refuse a commit while the document gate fails, or while any of this
+# project's own checks fails, from any window
+# (kb/git-discipline.md, "The gate decides a commit by its exit code").
+# Installed by: git config core.hooksPath scripts/githooks
+#
+# This file is kit-owned and the same in every project. A project's own
+# checks live beside it in scripts/githooks/pre-commit.d/, one sh script per
+# file, run in name order with the project's venv python in $PY; the first to
+# exit nonzero refuses the commit. Each is run with sh rather than executed,
+# so a file that lost its executable bit on another OS still runs instead of
+# being skipped in silence.
+root=$(git rev-parse --show-toplevel) || exit 1
+if [ -x "$root/.venv/Scripts/python.exe" ]; then py="$root/.venv/Scripts/python.exe"; else py="$root/.venv/bin/python"; fi
+out=$("$py" "$root/scripts/check_docs.py" 2>&1)
+rc=$?
+if [ $rc -ne 0 ]; then
+  printf '%s\n' "$out" | grep -v '^not ready'
+  echo "pre-commit: the document gate failed (exit $rc); nothing was committed."
+  exit 1
+fi
+for check in "$root"/scripts/githooks/pre-commit.d/*; do
+  [ -f "$check" ] || continue
+  out=$(PY="$py" sh "$check" 2>&1)
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    printf '%s\n' "$out"
+    echo "pre-commit: scripts/githooks/pre-commit.d/$(basename "$check") failed (exit $rc); nothing was committed."
+    exit 1
+  fi
+done
+exit 0
