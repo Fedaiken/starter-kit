@@ -20,6 +20,7 @@ scripts/desk_save.py
 scripts/lane_guard.py
 scripts/note_prompt.py
 scripts/agent_guard.py
+scripts/check_skill_commands.py
 skills/desk/SKILL.md
 skills/lane/SKILL.md
 
