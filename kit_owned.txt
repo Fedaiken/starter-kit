@@ -36,6 +36,7 @@ tests/test_kit_sync.py
 tests/test_settings_deny.py
 tests/test_check_docs_sources.py
 tests/test_check_docs_yaml.py
+tests/test_subprocess_encoding.py
 
 # The method
 kb/cardinal-rule-solve-through-structure.md
