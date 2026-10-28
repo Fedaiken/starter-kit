@@ -19,6 +19,7 @@ scripts/check_ownership.py
 scripts/desk_save.py
 scripts/lane_guard.py
 scripts/note_prompt.py
+scripts/agent_guard.py
 skills/desk/SKILL.md
 skills/lane/SKILL.md
 
