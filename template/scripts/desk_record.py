@@ -74,6 +74,14 @@ escape), a first word that is not a program, or a git subcommand
 `scripts/lane_guard.py` refuses (a command run by this script never passes
 through the guard's hook). A lane finds out at the stamp, not at the end.
 
+A LANE'S GATE IS ITS OWN
+------------------------
+A `done:` command that runs `check_docs.py` is refused at the stamp unless its
+`--only` names exactly the sheet's `owns:` paths: none outside them, none of
+them left out. Unscoped, the gate measures every lane's documents, and one
+lane's half-edited file failed three finished lanes (desk rules-check,
+2026-10-27). The whole-tree gate is `desk_save.py`'s, before the one save.
+
 SINGLE WRITER
 -------------
 The desk writes this record and nothing else does; a lane's writes are its
@@ -232,6 +240,60 @@ def whole_suite_lines(done: str) -> list[str]:
     return [line.strip() for line in done.splitlines()
             if _PYTEST.search(line)
             and not _TEST_PATH.search(line.replace("\\", "/"))]
+
+#: The document gate, and the flag that scopes it to a lane's own files. On
+#: desk rules-check (2026-10-27) every `done:` ran the gate on the whole tree,
+#: and one lane's digest over budget failed three finished lanes' report-done
+#: (`kb/desk-done-gate-blocks-on-other-lanes.md`). A lane's gate names its
+#: sheet's `owns:` paths; the whole tree is `desk_save.py`'s to measure.
+DOC_GATE = "check_docs.py"
+ONLY_FLAG = "--only"
+
+
+def doc_gate_problem(command: str, owns: Sequence[str]) -> str | None:
+    """Why this `done:` command runs the document gate on more, or less, than
+    the sheet's `owns:` paths; None when it is not the gate or is scoped to
+    exactly them -- every `--only` path inside `owns:`, every `owns:` path
+    reached by one."""
+    words, why = command_words(command)
+    if why:
+        return None
+    gate = next((n for n, word in enumerate(words[1:], start=1)
+                 if word.replace("\\", "/").rsplit("/", 1)[-1] == DOC_GATE), None)
+    if gate is None:
+        return None
+    scoped = f"{words[0]} {words[gate]} {ONLY_FLAG} {' '.join(owns)}"
+    named: list[str] | None = None
+    rest = words[gate + 1:]
+    for n, word in enumerate(rest):
+        if word.startswith(ONLY_FLAG + "="):
+            named = (named or []) + [word.split("=", 1)[1]]
+        elif word == ONLY_FLAG:
+            named = named or []
+            for value in rest[n + 1:]:
+                if value.startswith("-"):
+                    break
+                named.append(value)
+    if not named:
+        return (f"it runs the document gate on the whole tree, so another lane's "
+                f"unfinished document fails this lane's report-done. Scope it to "
+                f"the sheet's `owns:`: `{scoped}` -- the whole-tree gate runs at "
+                f"the desk's save")
+    try:
+        paths = [clean_path(p) for p in named]
+    except DeskError as exc:
+        return f"its `{ONLY_FLAG}` {exc}"
+    outside = [p for p in paths if not any(covers(owned, p) for owned in owns)]
+    if outside:
+        return (f"its `{ONLY_FLAG}` names {', '.join(outside)}, which the sheet's "
+                f"`owns:` does not list; a lane's gate measures its own files. "
+                f"Write `{scoped}`")
+    left_out = [owned for owned in owns if not any(covers(p, owned) for p in paths)]
+    if left_out:
+        return (f"its `{ONLY_FLAG}` leaves out {', '.join(left_out)}, which the "
+                f"sheet owns, so a document there is never measured before the "
+                f"save. Write `{scoped}`")
+    return None
 
 #: What names a COMMAND in a `done:` block: a script or interpreter, pytest, or
 #: git with a subcommand. Lifted from Fantasy Football, where it was measured
@@ -910,6 +972,10 @@ def sheet_problems(text: str, repo: Path | None = None) -> list[str]:
         if why:
             problems.append(f"`done:` command `{command}` cannot be run by "
                             f"`report-done` as written: {why}")
+            continue
+        why = doc_gate_problem(command, owns)
+        if why:
+            problems.append(f"`done:` command `{command}` is refused: {why}")
     for line in whole_suite_lines(fields["done"]):
         problems.append(
             f"`done:` runs the whole test suite: `{line}`. Name the lane's own "
