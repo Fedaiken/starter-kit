@@ -190,6 +190,57 @@ def test_only_the_whole_suite_line_is_named(repo):
     assert f"`{VENV} -m pytest -q`" in said
 
 
+#: SHEET's `owns:` as the stamp records them, and the gate line scoped to them.
+OWNS = "records/2025/January records/2025/February"
+GATE = f"{VENV} scripts/check_docs.py"
+
+
+@pytest.mark.parametrize("line", [
+    GATE,
+    f"{GATE} --report",
+    f"`{GATE}` exits 0",
+    f"{VENV} scripts/check_docs.py --only",
+])
+def test_a_done_that_runs_the_document_gate_unscoped_is_refused_and_names_the_remedy(repo, line):
+    said = problems(with_done(line), repo)
+    assert "runs the document gate on the whole tree" in said
+    assert f"`{GATE} --only {OWNS}`" in said
+    assert "the whole-tree gate runs at the desk's save" in said
+
+
+@pytest.mark.parametrize("line, named", [
+    (f"{GATE} --only {OWNS} kb/some-digest.md", "kb/some-digest.md"),
+    (f"{GATE} --only records/2025 records/2025/January", "records/2025"),
+    (f"{GATE} --only=records/2024/Q1 --only {OWNS}", "records/2024/Q1"),
+])
+def test_an_only_path_the_sheet_does_not_own_is_refused(repo, line, named):
+    said = problems(with_done(line), repo)
+    assert f"names {named}, which the sheet's `owns:` does not list" in said
+    assert f"`{GATE} --only {OWNS}`" in said
+
+
+def test_an_only_that_leaves_out_an_owned_path_is_refused(repo):
+    said = problems(with_done(f"{GATE} --only records/2025/January"), repo)
+    assert "leaves out records/2025/February, which the sheet owns" in said
+
+
+@pytest.mark.parametrize("line", [
+    f"{GATE} --only {OWNS}",
+    f"{GATE} --only records/2025/February/ ./records/2025/January --report",
+    f"{GATE} --only records/2025/January/Ledger.md --only records/2025/January records/2025/February",
+    f"{GATE} --only=records/2025/January --only=records/2025/February",
+    f"`{GATE} --only {OWNS}` exits 0",
+])
+def test_a_gate_scoped_to_the_sheets_owns_passes(repo, line):
+    assert dr.sheet_problems(with_done(line), repo) == []
+
+
+def test_a_gate_command_the_done_shell_refuses_is_named_once(repo):
+    """A gate run `report-done` refuses on other grounds is named once, not twice."""
+    said = problems(with_done(f"{GATE} | tail -3"), repo)
+    assert "a pipe" in said and "document gate" not in said
+
+
 def test_two_unit_lines_are_two_units(repo):
     assert "`unit:` appears more than once" in problems(SHEET + "unit: another\n", repo)
 
@@ -833,7 +884,7 @@ def test_every_sheet_on_file_would_run_under_the_done_shell(tmp_path):
     if not sheets:
         planted = tmp_path / "coordination" / "desks" / "first-job" / "task_sheets" / "lane-alpha.md"
         planted.parent.mkdir(parents=True)
-        planted.write_text(SHEET.split("done:\n")[0] + f"done:\n{VENV} scripts/check_docs.py\n", encoding="utf-8")
+        planted.write_text(SHEET.split("done:\n")[0] + f"done:\n{GATE} --only {OWNS}\n", encoding="utf-8")
         sheets, where = sorted(tmp_path.glob(SHEET_GLOB)), tmp_path
     failures, ran = [], 0
     for path in sheets:
