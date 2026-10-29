@@ -4,6 +4,7 @@
     <venv python> scripts/check_docs.py              # run every check; exit 1 on a hit
     <venv python> scripts/check_docs.py --report     # every budgeted file at % used, then the checks
     <venv python> scripts/check_docs.py --write-kb   # render kb/README.md from frontmatter, then the checks
+    <venv python> scripts/check_docs.py --only kb/x.md skills/y   # only the documents at or under these (a lane's done:)
 
 WHY THIS EXISTS
 ---------------
@@ -125,6 +126,23 @@ THE CHECKS
    written; a rule that must name the forbidden words quotes the whole phrase
    in backticks, which marks a mention. A phrase only partly in backticks
    (via `WebSearch`) is still a citation.
+
+SCOPED RUN
+----------
+`--only <paths>` runs the checks for the documents at or under those paths and
+no other. A lane's `done:` names its sheet's `owns:` paths, so another lane's
+half-edited document cannot fail a finished one: on desk rules-check,
+2026-10-27, one digest over budget held three finished lanes' report-done
+(`kb/desk-done-gate-blocks-on-other-lanes.md`). Per named document: BUDGET,
+ORPHANS (still read against every reader), KB frontmatter and the entry's own
+row in `kb/README.md`, SETUP, CLAIMS and SOURCES; a TRIPS folder whole when a
+path is in it or above it. A check about one file runs only when that file is
+named: the whole kb index (`kb/README.md`), INTAKE (`Intake_Checklist.md`), the
+budgets-only-go-down floors (`doc_budgets.yaml`). MEMORY never runs under
+`--only`: its folder is outside the project and no lane owns it. Nothing
+escapes: `desk_save.py` and the pre-commit hook run the whole tree, and
+`desk_record.py` refuses at the stamp a `done:` that runs this gate without
+`--only`, or with paths other than the sheet's `owns:`.
 
 Every YAML this gate reads (`doc_budgets.yaml`, kb and memory frontmatter)
 goes through `strict_load`, which refuses a repeated mapping key. `safe_load`
@@ -251,6 +269,26 @@ def git(*args: str) -> str:
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
     return result.stdout
+
+
+def clean_only(raw: str) -> str:
+    """An `--only` path, repo-relative with forward slashes, or ValueError."""
+    path = raw.strip().replace("\\", "/").rstrip("/")
+    while path.startswith("./"):
+        path = path[2:]
+    parts = path.split("/")
+    if not path or path == "." or path.startswith("/") or ":" in parts[0] or ".." in parts:
+        raise ValueError(f"--only {raw!r} is not a path inside this project; name it repo-relative (kb/x.md, skills/desk)")
+    return path
+
+
+def in_scope(rel: str, only: list[str] | None) -> bool:
+    """Whether `rel` is at or under one of `only`; every path is, with no `--only`.
+    Case is folded, as the file systems this runs on fold it."""
+    if only is None:
+        return True
+    rel = rel.casefold()
+    return any(rel == p.casefold() or rel.startswith(p.casefold() + "/") for p in only)
 
 
 def tree_documents() -> list[str]:
@@ -416,16 +454,18 @@ def assign(files: list[str], budgets: dict) -> dict[str, list[dict]]:
     return out
 
 
-def check_budgets(files: list[str], budgets: dict, report: bool) -> tuple[list[str], list[str]]:
-    """(failures, notes). Notes are the headroom band and the optional report."""
+def check_budgets(files: list[str], budgets: dict, report: bool, floors: bool = True) -> tuple[list[str], list[str]]:
+    """(failures, notes). Notes are the headroom band and the optional report.
+    `floors` False skips the budgets-only-go-down check, which is about
+    `doc_budgets.yaml` rather than any document in `files`."""
     failures: list[str] = []
     notes: list[str] = []
     rows: list[tuple[str, int, int, int]] = []
-    floors = historical_floors()
+    lowest = historical_floors() if floors else {}
     for entry in budgets["entries"]:
         key = _selector(entry)
-        if "budget" in entry and key in floors and entry["budget"] > floors[key]:
-            failures.append(f"{key}: budget raised to {entry['budget']} b, but it once held {floors[key]} b. Budgets only go down; lower it and trim the file.")
+        if "budget" in entry and key in lowest and entry["budget"] > lowest[key]:
+            failures.append(f"{key}: budget raised to {entry['budget']} b, but it once held {lowest[key]} b. Budgets only go down; lower it and trim the file.")
     for rel, matched in sorted(assign(files, budgets).items()):
         if not matched:
             failures.append(f"{rel}: no doc_budgets.yaml row. A document does not exist until someone decides its tier and budget.")
@@ -464,11 +504,13 @@ def _is_named(rel: str, entry: dict, corpus: dict[str, str]) -> bool:
     return any(needle.search(text) for src, text in corpus.items() if src != rel)
 
 
-def find_orphans(files: list[str], budgets: dict, roots: dict[str, str], read) -> list[str]:
+def find_orphans(files: list[str], budgets: dict, roots: dict[str, str], read, only: list[str] | None = None) -> list[str]:
     """Tier-3 files no reader names. `roots` maps each root reader to its text;
     `read(rel)` returns a file's text. A `reader: true` file joins the corpus
     only once the corpus already names it, repeated until nothing joins, so a
-    chain of readers counts only if it starts at a root."""
+    chain of readers counts only if it starts at a root. `files` is the whole
+    tree, because any of it may be the reader; `only` limits which files can
+    fail."""
     claimed = {rel: m[0] for rel, m in assign(files, budgets).items() if len(m) == 1}
     corpus = dict(roots)
     waiting = sorted(rel for rel, e in claimed.items() if e.get("reader") and rel not in corpus)
@@ -482,7 +524,7 @@ def find_orphans(files: list[str], budgets: dict, roots: dict[str, str], read) -
                 joined = True
     failures: list[str] = []
     for rel, entry in sorted(claimed.items()):
-        if entry["tier"] == 3 and not _is_named(rel, entry, corpus):
+        if entry["tier"] == 3 and in_scope(rel, only) and not _is_named(rel, entry, corpus):
             failures.append(
                 f"{rel}: tier-3 document named by nothing a session reads (CLAUDE.md, kb/README.md, a SKILL.md, or a `reader: true` file one of them names). "
                 "Point at it, set `reached_by_folder: true` on its row if a reader names its folder, or delete it; Archive/ is not a destination."
@@ -490,12 +532,12 @@ def find_orphans(files: list[str], budgets: dict, roots: dict[str, str], read) -
     return failures
 
 
-def check_orphans(files: list[str], budgets: dict) -> list[str]:
+def check_orphans(files: list[str], budgets: dict, only: list[str] | None = None) -> list[str]:
     sources = [ROOT / p for p in SOURCE_PATHS]
     for pattern in SOURCE_GLOBS:
         sources += sorted(ROOT.glob(pattern))
     roots = {s.relative_to(ROOT).as_posix(): s.read_text(encoding="utf-8") for s in sources if s.is_file()}
-    return find_orphans(files, budgets, roots, lambda rel: (ROOT / rel).read_text(encoding="utf-8"))
+    return find_orphans(files, budgets, roots, lambda rel: (ROOT / rel).read_text(encoding="utf-8"), only)
 
 
 # --- budget claims -----------------------------------------------------------
@@ -566,16 +608,19 @@ def flagged_figures(text: str) -> list[str]:
             if _BUDGET_WORDS.search(text[max(0, m.start() - CLAIM_WINDOW):m.start()]) or _BUDGET_WORDS.search(text[m.end():m.end() + CLAIM_WINDOW])]
 
 
-def find_budget_claim_problems(documents: list[str], budgets: dict, read) -> list[str]:
+def find_budget_claim_problems(documents: list[str], budgets: dict, read, only: list[str] | None = None) -> list[str]:
     """`documents` is the swept population; `read(rel)` returns a file's text,
     or None when the file is not there. A declared document is checked whether
     or not the population holds it, so a declaration cannot pass by naming a
     file the sweep skips. A kit claim (`KIT_BUDGET_CLAIMS`) whose document or
-    sentence is absent checks nothing and leaves the document to the sweep."""
+    sentence is absent checks nothing and leaves the document to the sweep.
+    `only` limits the claims and exemptions read to the documents it names."""
     failures: list[str] = []
     declared = set(KIT_PROSE_EXEMPT) | set(budgets["budget_prose_exempt"])
     for claim in budgets["budget_claims"] + _kit_claims(budgets):
         doc, budget = claim["in"], claim["budget"]
+        if not in_scope(doc, only):
+            continue
         text = read(doc)
         if text is None:
             if not claim["kit"]:
@@ -600,6 +645,8 @@ def find_budget_claim_problems(documents: list[str], budgets: dict, read) -> lis
                 "Declare the claim in doc_budgets.yaml, reword it, or exempt the document with a `why:` if its figures are not budget claims."
             )
     for rel, why in sorted(budgets["budget_prose_exempt"].items()):
+        if not in_scope(rel, only):
+            continue
         text = read(rel)
         if text is None:
             failures.append(f"{rel}: exempted in budget_prose_exempt, and this working tree has no such file. Drop the row.")
@@ -608,12 +655,13 @@ def find_budget_claim_problems(documents: list[str], budgets: dict, read) -> lis
     return failures
 
 
-def check_budget_claims(files: list[str], budgets: dict) -> list[str]:
+def check_budget_claims(files: list[str], budgets: dict, only: list[str] | None = None) -> list[str]:
     def read(rel: str) -> str | None:
         path = ROOT / rel
         return path.read_text(encoding="utf-8") if path.is_file() else None
 
-    return find_budget_claim_problems(sorted(assign(files, budgets)), budgets, read)
+    documents = [rel for rel in sorted(assign(files, budgets)) if in_scope(rel, only)]
+    return find_budget_claim_problems(documents, budgets, read, only)
 
 
 # --- kb ----------------------------------------------------------------------
@@ -678,21 +726,46 @@ def validate_kb(path: Path, meta: dict | None, err: str | None) -> list[str]:
     return problems
 
 
+def kb_row(path: Path, meta: dict) -> str:
+    r = meta["retrieved"]
+    r = r.isoformat() if isinstance(r, dt.date) else str(r).strip()
+    return f"| [{path.name}]({path.name}) | {meta['title'].strip()} | {meta['topic'].strip()} | {r} | {meta['status']} |"
+
+
 def render_kb(found) -> str:
     lines = [KB_HEADER.rstrip("\n"), ""]
     for kind, heading in KB_SECTIONS:
         rows = [(p, m) for p, m, _ in found if (m or {}).get("kind") == kind]
         lines += [f"## {heading}", "", "| Entry | Title | Topic | Retrieved | Status |", "|---|---|---|---|---|"]
         for path, meta in rows:
-            r = meta["retrieved"]
-            r = r.isoformat() if isinstance(r, dt.date) else str(r).strip()
-            lines.append(f"| [{path.name}]({path.name}) | {meta['title'].strip()} | {meta['topic'].strip()} | {r} | {meta['status']} |")
+            lines.append(kb_row(path, meta))
         lines.append("")
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def check_kb(write: bool) -> list[str]:
+def check_kb_rows(found, only: list[str]) -> list[str]:
+    """Under `--only` without `kb/README.md`: each named entry's frontmatter, and
+    its own row in the index as that frontmatter renders it. Another entry's
+    frontmatter, and the order of rows, are the whole index's, checked at the save."""
+    index = ROOT / KB_INDEX
+    current = set(index.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")) if index.exists() else set()
+    problems: list[str] = []
+    for path, meta, err in found:
+        rel = f"kb/{path.name}"
+        if not in_scope(rel, only):
+            continue
+        invalid = validate_kb(path, meta, err)
+        if invalid:
+            problems += invalid
+        elif kb_row(path, meta) not in current:
+            problems.append(f"{KB_INDEX} has no row as {rel}'s frontmatter renders it; `<venv python> scripts/check_docs.py --write-kb` writes it, run by the lane that owns {KB_INDEX}.\n      {kb_row(path, meta)}")
+    return problems
+
+
+def check_kb(write: bool, only: list[str] | None = None) -> list[str]:
     found = kb_entries()
+    if not in_scope(KB_INDEX, only):
+        return check_kb_rows(found, only)
     problems = [p for path, meta, err in found for p in validate_kb(path, meta, err)]
     if problems:
         return problems
@@ -757,8 +830,9 @@ def find_search_citations(rel: str, text: str) -> list[str]:
     return failures
 
 
-def check_sources() -> list[str]:
-    return [f for path, _, _ in kb_entries() for f in find_search_citations(f"kb/{path.name}", path.read_text(encoding="utf-8"))]
+def check_sources(only: list[str] | None = None) -> list[str]:
+    return [f for path, _, _ in kb_entries() if in_scope(f"kb/{path.name}", only)
+            for f in find_search_citations(f"kb/{path.name}", path.read_text(encoding="utf-8"))]
 
 
 # --- memory ------------------------------------------------------------------
@@ -1107,17 +1181,22 @@ def check_trip_folder(folder: Path, rel_folder: str) -> tuple[list[str], list[st
     return failures, notes
 
 
-def check_trips(root: Path = ROOT) -> tuple[list[str], list[str]]:
+def check_trips(root: Path = ROOT, only: list[str] | None = None) -> tuple[list[str], list[str]]:
+    """`only` checks a trip folder whole when a path is in it or above it: its
+    checks read across the folder's files (a Booked row names a record section)."""
     failures: list[str] = []
     notes: list[str] = []
     trips = root / TRIPS_DIR
     if trips.is_dir():
         for folder in sorted(p for p in trips.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))):
-            f, n = check_trip_folder(folder, f"{TRIPS_DIR}/{folder.name}")
+            rel_folder = f"{TRIPS_DIR}/{folder.name}"
+            if only is not None and not (in_scope(rel_folder, only) or any(in_scope(p, [rel_folder]) for p in only)):
+                continue
+            f, n = check_trip_folder(folder, rel_folder)
             failures += f
             notes += n
     log = root / TRIP_LOG
-    if log.is_file():
+    if log.is_file() and in_scope(TRIP_LOG, only):
         failures += check_trip_log_text(log.read_text(encoding="utf-8"))
     return failures, notes
 
@@ -1125,11 +1204,29 @@ def check_trips(root: Path = ROOT) -> tuple[list[str], list[str]]:
 # --- main --------------------------------------------------------------------
 
 
+#: What `--only` leaves out, in its help text and in every scoped OK line.
+ONLY_SKIPS = (f"MEMORY (outside the project; no lane owns it); the whole kb index unless {KB_INDEX} is named "
+              f"(each named entry's own row is checked); INTAKE unless {INTAKE_FILE} is named; the "
+              f"budgets-only-go-down floors unless {BUDGETS_FILE.name} is named")
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], epilog="There is no --fix; trimming a document is a judgment call.")
     parser.add_argument("--report", action="store_true", help="print every budgeted document at its percentage of budget, then run the checks")
     parser.add_argument("--write-kb", action="store_true", help="render kb/README.md from frontmatter, then run the checks")
+    parser.add_argument("--only", nargs="+", action="extend", metavar="PATH",
+                        help="check only the documents at or under these paths: a lane's done: names its sheet's owns: "
+                             "paths, and the desk's save runs the whole tree. Skipped under --only: " + ONLY_SKIPS)
     args = parser.parse_args(argv)
+
+    try:
+        only = None if args.only is None else list(dict.fromkeys(clean_only(p) for p in args.only))
+    except ValueError as exc:
+        print(f"FAIL - {exc}. Nothing was checked; this is not a pass.", file=sys.stderr)
+        return 2
+    if args.write_kb and not in_scope(KB_INDEX, only):
+        print(f"FAIL - --write-kb writes {KB_INDEX}, which --only does not name, and a scoped run writes nothing outside its paths. Nothing was checked; this is not a pass.", file=sys.stderr)
+        return 2
 
     try:
         budgets = load_budgets()
@@ -1140,28 +1237,36 @@ def main(argv: list[str]) -> int:
     except RuntimeError as exc:
         print(f"FAIL - cannot list documents: {exc}. Nothing was checked; this is not a pass.", file=sys.stderr)
         return 2
+    scoped = [rel for rel in files if in_scope(rel, only)]
 
-    kb_problems = check_kb(args.write_kb)
-    budget_failures, notes = check_budgets(files, budgets, args.report)
-    orphan_failures = check_orphans(files, budgets)
-    memory_failures = check_memory()
-    intake_failures = check_intake()
-    setup_failures = check_setup(files)
-    trip_failures, trip_notes = check_trips()
+    kb_problems = check_kb(args.write_kb, only)
+    budget_failures, notes = check_budgets(scoped, budgets, args.report, floors=in_scope(BUDGETS_FILE.name, only))
+    orphan_failures = check_orphans(files, budgets, only)
+    memory_failures = check_memory() if only is None else []
+    intake_failures = check_intake() if in_scope(INTAKE_FILE, only) else []
+    setup_failures = check_setup(scoped)
+    trip_failures, trip_notes = check_trips(only=only)
     notes += trip_notes
-    claim_failures = check_budget_claims(files, budgets)
-    source_failures = check_sources()
+    claim_failures = check_budget_claims(scoped, budgets, only)
+    source_failures = check_sources(only)
+    for path in only or []:
+        if not any(in_scope(rel, [path]) for rel in files):
+            notes.append(f"--only {path}: no document at or under it")
 
     sections = (("BUDGET", budget_failures), ("ORPHANS", orphan_failures), ("KB", kb_problems), ("MEMORY", memory_failures), ("INTAKE", intake_failures), ("SETUP", setup_failures), ("TRIPS", trip_failures), ("CLAIMS", claim_failures), ("SOURCES", source_failures))
     total = sum(len(f) for _, f in sections)
     for line in notes:
         print(line)
     if total:
-        print(f"FAIL - {total} problem(s) across {len(assign(files, budgets))} document(s):", file=sys.stderr)
+        print(f"FAIL - {total} problem(s) across {len(assign(scoped, budgets))} document(s){' under --only' if only else ''}:", file=sys.stderr)
         for label, failures in sections:
             for f in failures:
                 print(f"  [{label}] {f}", file=sys.stderr)
         return 1
+    if only is not None:
+        print(f"OK - {len(assign(scoped, budgets))} document(s) under --only {' '.join(only)} classified, within budget and in form. "
+              f"Skipped under --only: {ONLY_SKIPS}. The whole-tree gate runs at the desk's save.")
+        return 0
     print(f"OK - {len(assign(files, budgets))} document(s) classified and within budget; kb index current; memory folder clean; intake cells in form; no setup marker left; trip files in form; budget claims current; no search cited as a source.")
     return 0
 
