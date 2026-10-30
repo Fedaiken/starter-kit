@@ -126,11 +126,75 @@ def test_each_per_document_check_is_scoped(tree, capsys):
     assert run(capsys, "--only", "mine", "notes/named.md", "kb/good.md")[0] == 0
 
 
-def test_a_named_kb_entry_needs_its_own_row_in_the_index(tree, capsys):
+def kb_tier_3(tree):
+    """The kb rows as this project has them: tier 3, so a new entry is orphaned
+    until the index names it."""
+    write(tree, "doc_budgets.yaml", BUDGETS.replace('glob: "kb/*.md"\n    tier: 2', 'glob: "kb/*.md"\n    tier: 3'))
+
+
+def test_a_new_kb_entry_with_no_row_passes_only_with_a_note(tree, capsys):
+    """Desk trade-import, 2026-10-29: four lanes' new entries failed their own
+    done: until the README's owner re-rendered. The save renders it now."""
+    kb_tier_3(tree)
     write(tree, "kb/new.md", ENTRY.format(name="new"))
     code, said = run(capsys, "--only", "kb/new.md")
-    assert code == 1 and "kb/README.md has no row as kb/new.md's frontmatter renders it" in said
-    assert "--write-kb" in said
+    assert code == 0, said
+    assert "rendered at the save: kb/README.md has no row as kb/new.md's frontmatter renders it" in said
+    assert "rendered at the save: kb/new.md is named only by a kb/README.md row" in said
+    assert "[KB]" not in said and "[ORPHANS]" not in said
+    assert "new.md" not in (tree / "kb/README.md").read_text(encoding="utf-8")
+
+
+def test_a_stale_row_for_a_named_entry_is_a_note(tree, capsys):
+    write(tree, "kb/good.md", ENTRY.format(name="good").replace("What good found.", "What good found, revised."))
+    code, said = run(capsys, "--only", "kb/good.md")
+    assert code == 0 and "rendered at the save" in said and "kb/good.md" in said
+
+
+def test_every_other_failure_of_an_unrendered_entry_still_fails(tree, capsys):
+    kb_tier_3(tree)
+    write(tree, "kb/new.md", ENTRY.format(name="new") + "x" * 4000 + "\n")
+    code, said = run(capsys, "--only", "kb/new.md")
+    assert code == 1 and "[BUDGET] kb/new.md" in said
+    assert "[KB]" not in said and "[ORPHANS]" not in said
+
+
+def test_a_missing_row_for_an_entry_outside_only_is_not_checked(tree, capsys):
+    write(tree, "kb/new.md", ENTRY.format(name="new"))
+    code, said = run(capsys, "--only", "mine")
+    assert code == 0, said
+    assert "kb/new.md" not in said
+
+
+def test_the_whole_tree_run_still_fails_a_missing_or_hand_typed_row(tree, capsys):
+    (tree / "kb/broken.md").unlink()
+    run(capsys, "--write-kb")
+    write(tree, "kb/new.md", ENTRY.format(name="new"))
+    code, said = run(capsys)
+    assert code == 1 and "[KB] kb/README.md disagrees with the entry frontmatter" in said and "[new.md](new.md)" in said
+    run(capsys, "--write-kb")
+    index = tree / "kb/README.md"
+    index.write_text(index.read_text(encoding="utf-8") + "| [x.md](x.md) | Hand | Typed | 2026-10-27 | current |\n", encoding="utf-8")
+    code, said = run(capsys)
+    assert code == 1 and "[KB] kb/README.md disagrees with the entry frontmatter" in said and "Hand" in said
+
+
+def test_as_rendered_reads_the_index_the_save_will_write_and_writes_nothing(tree, capsys):
+    kb_tier_3(tree)
+    (tree / "kb/broken.md").unlink()
+    write(tree, "kb/new.md", ENTRY.format(name="new"))
+    before = (tree / "kb/README.md").read_text(encoding="utf-8")
+    code, said = run(capsys, "--as-rendered")
+    assert "would write kb/README.md" in said
+    assert "[KB]" not in said and "[ORPHANS] kb/" not in said
+    assert (tree / "kb/README.md").read_text(encoding="utf-8") == before
+    assert code == 1 and "theirs/b.md" in said  # the rest of the tree is still gated
+
+
+def test_as_rendered_and_write_kb_are_refused_together(tree, capsys):
+    with pytest.raises(SystemExit) as stop:
+        cd.main(["--as-rendered", "--write-kb"])
+    assert stop.value.code == 2
 
 
 def test_naming_the_index_runs_the_whole_index_check(tree, capsys):
