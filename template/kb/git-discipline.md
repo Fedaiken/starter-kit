@@ -15,7 +15,7 @@ The owner does not run git. Claude does, every time, without being asked — and
 
 1. **A private remote from day one, when there is one.** `git init -b main`; the identity is the owner's, from their Starter Kit profile. On GitHub: `gh repo create <owner>/<name> --private --source . --push`. On another host, add the URL the owner gives as `origin`. With no remote (a work machine that allows none), the repository is local and every "push" below is skipped and said so.
 2. **Stage named paths.** Never `git add .` or `git add -A`. The paths staged are the paths this turn wrote; anything else in `git status` is someone else's or a mistake, and gets named, not swept in.
-3. **Commit from a message file.** Write the message to the scratchpad, then `git commit -F <path>`. It works in every shell; a heredoc does not (PowerShell has none).
+3. **Commit from a message file.** Write the message to the scratchpad with the Write tool, then `git commit -F <path>`. It works in every shell; a heredoc does not (PowerShell has none). Not PowerShell 5.1's `Out-File -Encoding utf8`: it writes a BOM, which lands at the front of the commit subject (seen 2026-10-29, Savecraft c1efd9d).
 4. **Push in the same turn.** A commit that is not pushed is a backup nobody has. If the push fails, say so in the reply — do not leave it for the owner to discover.
 5. **The subject line says what changed, in plain words.** The owner reads `git log` as the project's diary.
 
