@@ -113,3 +113,60 @@ def test_a_passing_document_gate_lets_the_save_through(job):
     gate.write_text("print('OK')\n", encoding="utf-8")
     dr.outside(DESK, ["scripts"], "the stand-in gate")
     assert ds.save(DESK, "the job", push=False) == 0
+
+
+#: A stand-in gate that renders the kb index on `--write-kb`, as the real one
+#: does, then exits with the code given.
+RENDERING_GATE = """import sys
+from pathlib import Path
+if "--write-kb" in sys.argv:
+    Path("kb/README.md").write_text("rendered from frontmatter\\n", encoding="utf-8")
+print("OK" if {code} == 0 else "FAIL - notes.md has no budget row")
+sys.exit({code})
+"""
+
+
+def rendering_gate(job, code=0):
+    gate = job / "scripts" / "check_docs.py"
+    gate.parent.mkdir()
+    gate.write_text(RENDERING_GATE.format(code=code), encoding="utf-8")
+    dr.outside(DESK, ["scripts"], "the stand-in gate")
+
+
+def test_the_save_renders_the_kb_index_and_commits_it_though_no_lane_owns_it(job, capsys):
+    """Desk trade-import, 2026-10-29: a lane's new kb entry waited on the lane
+    that owned kb/README.md to re-render it. The save renders it now."""
+    rendering_gate(job)
+    assert ds.save(DESK, "the job", push=False) == 0
+    assert "rendered: kb/README.md" in capsys.readouterr().out
+    assert "kb/README.md" in out(job, "show", "--name-only", "--format=", "HEAD").split("\n")
+    assert out(job, "show", "HEAD:kb/README.md") == "rendered from frontmatter\n"
+
+
+def test_a_dry_run_says_it_would_render_and_leaves_the_index_untouched(job, capsys):
+    rendering_gate(job)
+    assert ds.save(DESK, "the job", dry_run=True, push=False) == 0
+    assert "would render: kb/README.md" in capsys.readouterr().out
+    assert not (job / "kb/README.md").exists()
+    assert dr.RECORD.exists()
+
+
+def test_a_failing_gate_puts_the_rendered_index_back(job, capsys):
+    (job / "kb/README.md").write_text("as it was\n", encoding="utf-8")
+    git(job, "add", "kb/README.md")
+    git(job, "commit", "-q", "-m", "the index")
+    rendering_gate(job, code=1)
+    assert ds.save(DESK, "the job", push=False) == 1
+    assert "document gate" in capsys.readouterr().err
+    assert (job / "kb/README.md").read_text(encoding="utf-8") == "as it was\n"
+    assert dr.RECORD.exists()
+
+
+def test_an_index_recorded_as_another_windows_is_not_rendered(job, capsys):
+    (job / "kb/README.md").write_text("another window's\n", encoding="utf-8")
+    dr.outside(DESK, ["kb/README.md"], "another window")
+    rendering_gate(job)
+    assert ds.save(DESK, "the job", push=False) == 0
+    assert "not rendered: kb/README.md" in capsys.readouterr().out
+    assert (job / "kb/README.md").read_text(encoding="utf-8") == "another window's\n"
+    assert "kb/README.md" not in out(job, "show", "--name-only", "--format=", "HEAD")
