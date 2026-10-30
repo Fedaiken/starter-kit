@@ -27,17 +27,23 @@ to remember, in the only order that works:
   1. the ownership check -- every changed file has exactly one owner. A failure
      stops here: nothing is closed, nothing is saved, each stray is named;
      then this project's document gate, `scripts/check_docs.py` (added when
-     the desk was ported from FACOWORK to HAZELHURST, 2026-09-24): a lane's
-     new document with no budget row, or one over its ceiling, stops the save
-     the same way;
+     the desk was ported from FACOWORK to HAZELHURST, 2026-09-24), run as
+     `--write-kb`: it renders `kb/README.md` from the kb frontmatter as the
+     desk's own act, then gates the whole tree. A lane's new kb entry
+     therefore needs no lane to own the index (desk trade-import, 2026-10-29,
+     `kb/desk-new-kb-entry-blocks-on-readme-owner.md`). A lane's new document
+     with no budget row, or one over its ceiling, stops the save the same way,
+     and the index is put back as it was. The index is not rendered when it is
+     recorded as another window's or another live desk holds it;
   2. `desk_record.py close-desk` -- the record, sheets and done files move under
      `closed/<stamp>/` in the desk's home;
   3. one commit, by path, of: every changed file a lane or the desk owns, plus
-     everything changed in the desk's home (`coordination/desks/<home>/`). A
-     path recorded as another window's work (`desk_record.py outside`), or held
-     by another live desk, is never in it. A commit that fails -- another
-     desk committing in the same moment holds git's `index.lock` -- puts the
-     closed desk back, so the save simply runs again;
+     everything changed in the desk's home (`coordination/desks/<home>/`), plus
+     `kb/README.md` when step 1's render changed it. A path recorded as another
+     window's work (`desk_record.py outside`), or held by another live desk,
+     is never in it. A commit that fails -- another desk committing in the
+     same moment holds git's `index.lock` -- puts the closed desk and the index
+     back, so the save simply runs again;
   4. `git push origin main`.
 
 This file is kit-owned: identical in every project the Starter Kit seeds, and
@@ -98,20 +104,51 @@ def untracked(repo: Path) -> set[str]:
 #: save goes on without it.
 DOC_GATE = Path("scripts") / "check_docs.py"
 
+#: The kb index the gate renders from entry frontmatter (`--write-kb`). The
+#: save renders it, so no lane need own it.
+KB_INDEX = "kb/README.md"
 
-def doc_gate_failure(repo: Path) -> str | None:
+
+def doc_gate_failure(repo: Path, *args: str) -> str | None:
     """What the document gate printed when it failed, or None when it passed.
 
     Run BEFORE the desk is closed, so a refusal leaves the room as it was. The
     gate reads untracked files too, so a lane's new document is checked here
-    rather than after it is committed.
+    rather than after it is committed. `args` go to the gate: `--write-kb`
+    for the save, `--as-rendered` for a dry run.
     """
     gate = repo / DOC_GATE
     if not gate.exists():
         return None
-    proc = subprocess.run([sys.executable, str(gate)], cwd=str(repo),
+    proc = subprocess.run([sys.executable, str(gate), *args], cwd=str(repo),
                           capture_output=True, check=False)
     return None if proc.returncode == 0 else (said(proc) or f"exit {proc.returncode}")
+
+
+def render_blocker(theirs: Sequence[str]) -> str | None:
+    """Why the save may not render the kb index, or None when it renders it."""
+    if KB_INDEX in theirs:
+        return "it is recorded as another window's work"
+    claim = dr.another_desks_claim(KB_INDEX)
+    return None if claim is None else f"another live desk holds it: {claim}"
+
+
+def read_index() -> bytes | None:
+    index = dr.REPO / KB_INDEX
+    return index.read_bytes() if index.is_file() else None
+
+
+def unrender(before: bytes | None, new: Sequence[str] = ()) -> None:
+    """Put the kb index back as it was before the save rendered it. A refused
+    or failed save leaves the room as it was; a rendered index that no lane
+    owns would also fail the next run's ownership check."""
+    if KB_INDEX in new:
+        git(dr.REPO, "reset", "-q", paths=[KB_INDEX])
+    index = dr.REPO / KB_INDEX
+    if before is None:
+        index.unlink(missing_ok=True)
+    else:
+        index.write_bytes(before)
 
 
 def owned_changes(record: dict) -> tuple[list[str], list[str], list[str]]:
@@ -165,8 +202,19 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
               "given to its lane (`desk_record.py own`), undone by its maker, or "
               "recorded as another window's (`desk_record.py outside`).", file=sys.stderr)
         return 1
-    gate = doc_gate_failure(dr.REPO)
+    renders = (dr.REPO / DOC_GATE).exists()
+    if renders:
+        blocker = render_blocker(theirs)
+        if blocker is not None:
+            renders = False
+            print(f"not rendered: {KB_INDEX} -- {blocker}")
+    before = read_index()
+    render_flag = ("--as-rendered",) if dry_run else ("--write-kb",)
+    gate = doc_gate_failure(dr.REPO, *(render_flag if renders else ()))
+    rendered = renders and not dry_run and read_index() != before
     if gate is not None:
+        if rendered:
+            unrender(before)
         print(gate, file=sys.stderr)
         print(f"REFUSED - the document gate ({DOC_GATE.as_posix()}) fails; nothing "
               "was closed and nothing was saved. Fix the document, or give it a "
@@ -175,22 +223,28 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
     for path in theirs:
         print(f"left alone (another window's): {path}")
     if dry_run:
+        if renders:
+            print(f"would render: {KB_INDEX} ({DOC_GATE.as_posix()} --write-kb), "
+                  f"saved in the commit if that changes it")
         for path in mine:
             print(f"would save: {path}")
         print(f"DRY RUN - {len(mine)} path(s), plus whatever closing the desk moves "
               f"under {dr.HOME}/. Nothing was closed or saved.")
         return 0
 
+    if rendered:
+        print(f"rendered: {KB_INDEX}")
     target = dr.archive_desk(desk)
     print(f"desk closed; its record is under {target.relative_to(dr.REPO).as_posix()}")
 
     # Closing moved files within the desk's home, so the list is taken again:
     # what this desk owned and is still changed, plus everything in its home
     # that no other live desk holds (a desk left at `coordination/` has the
-    # homes of the desks under `coordination/desks/` inside its own).
+    # homes of the desks under `coordination/desks/` inside its own), plus the
+    # kb index this save rendered.
     now = dr.git_changed()
     others = dr.other_desks()
-    paths = sorted({p for p in now if p in set(mine)
+    paths = sorted({p for p in now if p in set(mine) or (rendered and p == KB_INDEX)
                     or (dr.covers(dr.HOME, p) and dr.another_desks_claim(p, others) is None)})
     paths = [p for p in paths if p not in set(theirs)]
     if not paths:
@@ -208,6 +262,8 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
             failed = f"`git commit` failed, and nothing was saved: {said(proc)}"
     if failed is not None:
         print(f"FAIL - {failed}", file=sys.stderr)
+        if rendered:
+            unrender(before, new)
         return restore(target, new)
     print(f"SAVED - {len(paths)} path(s) in one commit: {message}")
     if not push:
