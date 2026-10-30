@@ -5,6 +5,7 @@
     <venv python> scripts/check_docs.py --report     # every budgeted file at % used, then the checks
     <venv python> scripts/check_docs.py --write-kb   # render kb/README.md from frontmatter, then the checks
     <venv python> scripts/check_docs.py --only kb/x.md skills/y   # only the documents at or under these (a lane's done:)
+    <venv python> scripts/check_docs.py --as-rendered  # read kb/README.md as --write-kb would render it; write nothing
 
 WHY THIS EXISTS
 ---------------
@@ -42,7 +43,8 @@ THE CHECKS
    `Trips/Trip_Log.md` names its folder.
 3. KB. Every `kb/*.md` opens with the frontmatter block (`title`, `topic`,
    `keywords`, `kind`, `retrieved`, `status`), and `kb/README.md` is rendered
-   from it. A hand-typed row is drift and fails; `--write-kb` renders it.
+   from it. A hand-typed row is drift and fails; `--write-kb` renders it, and
+   `desk_save.py` runs `--write-kb` before its whole-tree gate.
 4. MEMORY. Every entry in this project's auto-memory folder is at most 2,000 b,
    carries `name`/`description`/`metadata.type`, and has a pointer line in
    `MEMORY.md` under 220 b; no pointer names a missing entry; `MEMORY.md` stays
@@ -143,6 +145,20 @@ budgets-only-go-down floors (`doc_budgets.yaml`). MEMORY never runs under
 escapes: `desk_save.py` and the pre-commit hook run the whole tree, and
 `desk_record.py` refuses at the stamp a `done:` that runs this gate without
 `--only`, or with paths other than the sheet's `owns:`.
+
+A named kb entry whose row in `kb/README.md` is missing or stale (its
+frontmatter changed since the last render) is a note, "rendered at the save",
+not a failure; so is an ORPHANS failure of a named document that the rendered
+row would clear, as it does for a new entry the index is what names. The save
+renders the index as the desk's own act (`desk_save.py` runs `--write-kb`
+before its whole-tree gate), so a lane that writes a kb entry neither owns the
+index nor waits on whoever does: on desk trade-import, 2026-10-29, four lanes
+waited on the README's owner to re-render
+(`kb/desk-new-kb-entry-blocks-on-readme-owner.md`). Every other failure of the
+entry still fails, and the whole-tree run still fails a missing, stale or
+hand-typed row, exactly as before. `--as-rendered` reads `kb/README.md` as
+`--write-kb` would render it and writes nothing: the desk's dry run, which
+previews the save rather than refusing what the save will render.
 
 Every YAML this gate reads (`doc_budgets.yaml`, kb and memory frontmatter)
 goes through `strict_load`, which refuses a repeated mapping key. `safe_load`
@@ -532,12 +548,29 @@ def find_orphans(files: list[str], budgets: dict, roots: dict[str, str], read, o
     return failures
 
 
-def check_orphans(files: list[str], budgets: dict, only: list[str] | None = None) -> list[str]:
+def check_orphans(files: list[str], budgets: dict, only: list[str] | None = None,
+                  pending: dict[str, str] | None = None, index_text: str | None = None) -> tuple[list[str], list[str]]:
+    """(failures, notes). `index_text` stands in for `kb/README.md` as the save
+    will render it (`--as-rendered`). `pending` rows (`check_kb_rows`) are read
+    as part of the index, because the save renders them; a failure only they
+    clear is a note."""
     sources = [ROOT / p for p in SOURCE_PATHS]
     for pattern in SOURCE_GLOBS:
         sources += sorted(ROOT.glob(pattern))
     roots = {s.relative_to(ROOT).as_posix(): s.read_text(encoding="utf-8") for s in sources if s.is_file()}
-    return find_orphans(files, budgets, roots, lambda rel: (ROOT / rel).read_text(encoding="utf-8"), only)
+    if index_text is not None:
+        roots[KB_INDEX] = index_text
+    def read(rel: str) -> str:
+        return (ROOT / rel).read_text(encoding="utf-8")
+
+    failures = find_orphans(files, budgets, roots, read, only)
+    if not pending:
+        return failures, []
+    roots[KB_INDEX] = roots.get(KB_INDEX, "") + "\n" + "\n".join(pending.values()) + "\n"
+    after = find_orphans(files, budgets, roots, read, only)
+    notes = [f"rendered at the save: {f.split(': ', 1)[0]} is named only by a {KB_INDEX} row the save renders, so its ORPHANS failure is a note here."
+             for f in failures if f not in after]
+    return after, notes
 
 
 # --- budget claims -----------------------------------------------------------
@@ -743,13 +776,16 @@ def render_kb(found) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def check_kb_rows(found, only: list[str]) -> list[str]:
+def check_kb_rows(found, only: list[str]) -> tuple[list[str], dict[str, str]]:
     """Under `--only` without `kb/README.md`: each named entry's frontmatter, and
-    its own row in the index as that frontmatter renders it. Another entry's
+    its own row in the index as that frontmatter renders it. (problems, pending):
+    `pending` maps each named entry whose row is missing or stale to that row.
+    The save renders it, so it is a note, not a problem. Another entry's
     frontmatter, and the order of rows, are the whole index's, checked at the save."""
     index = ROOT / KB_INDEX
     current = set(index.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")) if index.exists() else set()
     problems: list[str] = []
+    pending: dict[str, str] = {}
     for path, meta, err in found:
         rel = f"kb/{path.name}"
         if not in_scope(rel, only):
@@ -758,28 +794,34 @@ def check_kb_rows(found, only: list[str]) -> list[str]:
         if invalid:
             problems += invalid
         elif kb_row(path, meta) not in current:
-            problems.append(f"{KB_INDEX} has no row as {rel}'s frontmatter renders it; `<venv python> scripts/check_docs.py --write-kb` writes it, run by the lane that owns {KB_INDEX}.\n      {kb_row(path, meta)}")
-    return problems
+            pending[rel] = kb_row(path, meta)
+    return problems, pending
 
 
-def check_kb(write: bool, only: list[str] | None = None) -> list[str]:
+def check_kb(write: bool, only: list[str] | None = None, as_rendered: bool = False) -> tuple[list[str], dict[str, str]]:
+    """(problems, pending); `pending` is `check_kb_rows`', empty when the whole
+    index is checked. `as_rendered` passes an index that `--write-kb` would
+    rewrite, and writes nothing."""
     found = kb_entries()
     if not in_scope(KB_INDEX, only):
         return check_kb_rows(found, only)
     problems = [p for path, meta, err in found for p in validate_kb(path, meta, err)]
     if problems:
-        return problems
+        return problems, {}
     rendered = render_kb(found)
     index = ROOT / KB_INDEX
     current = index.read_text(encoding="utf-8").replace("\r\n", "\n") if index.exists() else None
     if current == rendered:
-        return []
+        return [], {}
     if write:
         index.write_text(rendered, encoding="utf-8", newline="\n")
         print(f"wrote {KB_INDEX} ({len(found)} entries)")
-        return []
+        return [], {}
+    if as_rendered:
+        print(f"would write {KB_INDEX} ({len(found)} entries); checked as rendered, and nothing was written")
+        return [], {}
     diff = list(difflib.unified_diff((current or "").splitlines(), rendered.splitlines(), "README.md (on disk)", "README.md (from frontmatter)", lineterm="", n=1))
-    return [f"{KB_INDEX} disagrees with the entry frontmatter; run `<venv python> scripts/check_docs.py --write-kb`.\n      " + "\n      ".join(diff[:40])]
+    return [f"{KB_INDEX} disagrees with the entry frontmatter; run `<venv python> scripts/check_docs.py --write-kb`.\n      " + "\n      ".join(diff[:40])], {}
 
 
 # --- sources -----------------------------------------------------------------
@@ -1206,14 +1248,18 @@ def check_trips(root: Path = ROOT, only: list[str] | None = None) -> tuple[list[
 
 #: What `--only` leaves out, in its help text and in every scoped OK line.
 ONLY_SKIPS = (f"MEMORY (outside the project; no lane owns it); the whole kb index unless {KB_INDEX} is named "
-              f"(each named entry's own row is checked); INTAKE unless {INTAKE_FILE} is named; the "
+              f"(each named entry's frontmatter is checked, and its own row, missing or stale, is a note: "
+              f"rendered at the save); INTAKE unless {INTAKE_FILE} is named; the "
               f"budgets-only-go-down floors unless {BUDGETS_FILE.name} is named")
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], epilog="There is no --fix; trimming a document is a judgment call.")
     parser.add_argument("--report", action="store_true", help="print every budgeted document at its percentage of budget, then run the checks")
-    parser.add_argument("--write-kb", action="store_true", help="render kb/README.md from frontmatter, then run the checks")
+    render = parser.add_mutually_exclusive_group()
+    render.add_argument("--write-kb", action="store_true", help="render kb/README.md from frontmatter, then run the checks")
+    render.add_argument("--as-rendered", action="store_true",
+                        help="read kb/README.md as --write-kb would render it and write nothing: the desk's dry run")
     parser.add_argument("--only", nargs="+", action="extend", metavar="PATH",
                         help="check only the documents at or under these paths: a lane's done: names its sheet's owns: "
                              "paths, and the desk's save runs the whole tree. Skipped under --only: " + ONLY_SKIPS)
@@ -1239,9 +1285,15 @@ def main(argv: list[str]) -> int:
         return 2
     scoped = [rel for rel in files if in_scope(rel, only)]
 
-    kb_problems = check_kb(args.write_kb, only)
+    kb_problems, kb_pending = check_kb(args.write_kb, only, args.as_rendered)
     budget_failures, notes = check_budgets(scoped, budgets, args.report, floors=in_scope(BUDGETS_FILE.name, only))
-    orphan_failures = check_orphans(files, budgets, only)
+    for rel, row in kb_pending.items():
+        notes.append(f"rendered at the save: {KB_INDEX} has no row as {rel}'s frontmatter renders it (none yet, or stale); "
+                     f"desk_save.py runs --write-kb before its whole-tree gate.\n      {row}")
+    as_rendered = args.as_rendered and in_scope(KB_INDEX, only) and not kb_problems
+    orphan_failures, orphan_notes = check_orphans(files, budgets, only, kb_pending,
+                                                  render_kb(kb_entries()) if as_rendered else None)
+    notes += orphan_notes
     memory_failures = check_memory() if only is None else []
     intake_failures = check_intake() if in_scope(INTAKE_FILE, only) else []
     setup_failures = check_setup(scoped)
