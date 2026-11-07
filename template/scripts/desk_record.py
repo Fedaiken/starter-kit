@@ -4,6 +4,8 @@
 Usage (from the workspace root; `<venv python>` is `.venv/Scripts/python.exe`
 on Windows and `.venv/bin/python` elsewhere -- `project_identity.venv_python`):
     <venv python> scripts/desk_record.py open-desk --desk the-desk --job "a year of statements into the records"
+    <venv python> scripts/desk_record.py plan --lanes 12 --desk the-desk
+    <venv python> scripts/desk_record.py plan --lanes 4 --reading Working/plan.md --desk the-desk
     <venv python> scripts/desk_record.py stamp copy-march coordination/desks/statements/task_sheets/copy-march.md --desk the-desk
     <venv python> scripts/desk_record.py own copy-march records/2025/March.md --desk the-desk
     <venv python> scripts/desk_record.py disown copy-march records/2025/March.md --desk the-desk
@@ -73,6 +75,27 @@ left in (`<lane>`), a Windows backslash outside quotes (POSIX reads it as an
 escape), a first word that is not a program, or a git subcommand
 `scripts/lane_guard.py` refuses (a command run by this script never passes
 through the guard's hook). A lane finds out at the stamp, not at the end.
+
+THE LANE BUDGET AND THE DESK'S OWN LOAD
+---------------------------------------
+The owner, 2026-11-02, after a desk warned of a crowded window on a guess: "it jsut
+means you are not really tracking context accurately". Ported that day from
+FACOWORK (`kb/lane-context-sizing.md`), three checks, each a measurement:
+
+* `sheet_problems` refuses a sheet whose lane is predicted past the budget,
+  from the bytes its `reads:` names (`scripts/lane_budget.py`), naming the
+  remedy: split the unit.
+* `plan` writes how many lanes each of this desk's windows takes (FACOWORK's
+  `desk_plan.generic_plan`), from the meter's reading of this window. The stamp
+  refuses `NO PLAN` until there is one -- a desk opened earlier plans the lanes
+  it has left. Past a window's planned count, the load with one more lane is
+  re-predicted from the meter: under the line the lane is stamped and
+  `PLAN CHANGED` is printed and written to the desk log; past it the stamp
+  refuses `PLANNED HANDOVER`. Under the count, a meter that says the rest no
+  longer fits refuses `REPLAN`.
+* The backstop (`handover_problem`): a desk at 60% of its window (70% for a
+  window planned past 60%) stamps nothing more. An unreadable meter never
+  refuses; it prints METER UNREADABLE.
 
 A LANE'S GATE IS ITS OWN
 ------------------------
@@ -983,6 +1006,12 @@ def sheet_problems(text: str, repo: Path | None = None) -> list[str]:
             f"minutes per lane and reports every other lane's breakage as this "
             f"lane's"
         )
+    # The lane budget: a unit too big for one window is split here, before it
+    # opens -- never after it compacts (`scripts/lane_budget.py`).
+    from lane_budget import budget_problem
+    over = budget_problem(text, repo)
+    if over:
+        problems.append(over)
     return problems
 
 
@@ -1161,6 +1190,383 @@ def record_close(lane: str, *, abandoned: str | None = None) -> None:
     write_record(record)
 
 
+# --- the desk's own load (the docstring's THE DESK PLANS ITS LOAD) ----------
+
+#: The context window, `context_meter.WINDOW_TOKENS` (measured; a test holds
+#: the two equal). Not imported: every desk command loads this module, and the
+#: meter is read only when a reading is wanted.
+WINDOW_TOKENS = 1_000_000
+
+#: The line a window is planned under and the ceiling one that cannot be cut
+#: may be planned to (FACOWORK desk decision DB1, its owner's words: "60% is the
+#: target we can hit 70% for the right reasons"). The stamp refuses at
+#: CEILING_PERCENT always, and from LINE_PERCENT unless the plan put this
+#: window past 60% on purpose.
+LINE_TOKENS = 600_000
+CEILING_TOKENS = 700_000
+LINE_PERCENT = 60
+CEILING_PERCENT = 70
+
+#: What a window carries on its first turn, before it reads anything (system
+#: prompt, CLAUDE.md, memory, tools). Measured here: 30 windows of this project
+#: since 2026-11-01 carried 36,869-43,540 on their first turn (median 37,301);
+#: the largest is taken, so a plan never under-prices a start. FACOWORK's was
+#: 69,000.
+START_TOKENS = 43_540
+
+#: What one lane costs the desk: its sheet written, stamped, opened, its ack,
+#: its questions, its receipts read, its close. FACOWORK's segment A was 9,600 a
+#: lane before its cuts (receipts by script, no ack, log rows by script,
+#: generated sheets) and 4,700 after; this desk has the first and the third of
+#: those and not the other two -- its sheets are written by hand and every lane
+#: acks -- so it takes the figure before the cuts. UNTIL CALIBRATED: no desk of
+#: this project has been measured lane by lane yet.
+PER_LANE_TOKENS = 9_600
+
+#: Tokens per byte of what the desk still reads (`plan --reading`): FACOWORK's
+#: K_READ_UNMEASURED, its fit for a desk whose reading it had not measured.
+K_READ = 0.61
+
+#: Margin in every prediction for the work no plan names (a re-cut sheet, a
+#: long ruling): FACOWORK's RESERVE_TOKENS.
+RESERVE_TOKENS = 50_000
+
+PLAN_CHANGED = "PLAN CHANGED"
+PLANNED_HANDOVER = "PLANNED HANDOVER"
+NO_PLAN = "NO PLAN"
+REPLAN = "REPLAN"
+METER_UNREADABLE = "METER UNREADABLE — "
+
+
+class PlanCheck:
+    """What the plan says about stamping one more lane now. `ok` False is a
+    refusal (`code` NO PLAN, REPLAN or PLANNED HANDOVER); True is OK or PLAN
+    CHANGED, the latter carrying the window's new lane count and prediction
+    for the caller to write."""
+
+    def __init__(self, ok: bool, code: str, message: str, *, window: int | None = None,
+                 planned_past_60: bool = False, projected: int | None = None,
+                 new_lanes: int | None = None, predicted_from: str | None = None):
+        self.ok, self.code, self.message = ok, code, message
+        self.window, self.planned_past_60 = window, planned_past_60
+        self.projected, self.new_lanes = projected, new_lanes
+        self.predicted_from = predicted_from
+
+
+def _number(n: int) -> str:
+    return {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}.get(n, str(n))
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def reading_bytes(paths: Sequence[str]) -> int:
+    total = 0
+    for rel in paths:
+        path = REPO / rel
+        if path.is_dir():
+            total += sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+        elif path.is_file():
+            total += path.stat().st_size
+        else:
+            raise DeskError(f"--reading {rel}: nothing there to read. Nothing was planned")
+    return total
+
+
+def ends_after(windows: Sequence[dict]) -> list[int]:
+    """The cumulative lane count each window but the last hands over after."""
+    ends, total = [], 0
+    for w in list(windows)[:-1]:
+        total += int(w.get("lanes", 0))
+        ends.append(total)
+    return ends
+
+
+def make_plan(lanes: int, reading: int = 0, *, tokens_now: int | None = None) -> dict:
+    """How many lanes each window of this job takes (FACOWORK's
+    `desk_plan.generic_plan`): (LINE - the load now - K_READ x bytes still to
+    read - the reserve) / PER_LANE_TOKENS. The first window starts from the
+    meter when it can be read, else from START_TOKENS plus its reading; every
+    later window from START_TOKENS plus the reading. A window that cannot take
+    one lane under the line takes one to the ceiling, marked past 60%; not even
+    that is refused."""
+    if lanes < 0:
+        raise DeskError("--lanes is how many lanes this job still opens: 0 or more")
+    reading_tokens = K_READ * reading
+
+    def capacity(base: float, line: int) -> int:
+        return int((line - base - RESERVE_TOKENS) // PER_LANE_TOKENS)
+
+    first_base = tokens_now if tokens_now is not None else START_TOKENS + reading_tokens
+    next_base = START_TOKENS + reading_tokens
+    windows, left, k = [], lanes, 1
+    while True:
+        base = first_base if k == 1 else next_base
+        cap, past = capacity(base, LINE_TOKENS), False
+        if cap < 1 and left > 0:
+            if capacity(base, CEILING_TOKENS) < 1:
+                raise DeskError(
+                    f"window {k} cannot take one lane even at the {CEILING_TOKENS:,}-"
+                    f"token ceiling: it starts at {int(base):,} with the reserve "
+                    f"{RESERVE_TOKENS:,} and {PER_LANE_TOKENS:,} a lane. Cut what the "
+                    f"desk reads, or hand this window over now. Nothing was planned")
+            cap, past = 1, True
+        take = min(max(cap, 0), left)
+        predicted = int(round(base + PER_LANE_TOKENS * take + RESERVE_TOKENS))
+        windows.append({"k": k, "lanes": take, "predicted": predicted,
+                        "past_60": past or predicted > LINE_TOKENS})
+        left -= take
+        if left <= 0:
+            break
+        k += 1
+        if k > 50:
+            raise DeskError("more than 50 windows: cut the job. Nothing was planned")
+    ends = ends_after(windows)
+    if len(windows) == 1:
+        said = "This job fits in one desk window."
+    elif len(ends) == 1:
+        said = (f"This job takes {_number(len(windows))} desk windows; after the "
+                f"{_ordinal(ends[0])} lane I'll ask you to open a fresh desk window.")
+    else:
+        said = (f"This job takes {_number(len(windows))} desk windows; after lanes "
+                f"{', '.join(str(e) for e in ends[:-1])} and {ends[-1]} I'll ask you to "
+                f"open a fresh desk window each time.")
+    for w in windows:
+        if w["past_60"]:
+            said += (f" Window {w['k']} is planned past 60% "
+                     f"({100 * w['predicted'] / WINDOW_TOKENS:.0f}%); it stops for "
+                     f"certain at 70%.")
+    return {"lanes": lanes, "reading_bytes": reading, "per_lane": PER_LANE_TOKENS,
+            "tokens_at_plan": tokens_now, "windows": windows, "ends_after": ends,
+            "owner_line": said, "planned_at": now_iso(), "window": 1}
+
+
+def window_tag(plan: dict, k: int) -> str:
+    return f"{plan.get('planned_at', '')}#{k}"
+
+
+def plan_window_row(plan: dict, k: int) -> dict | None:
+    return next((w for w in plan.get("windows", []) if w.get("k") == k), None)
+
+
+def opened_in_window(record: dict, plan: dict, k: int) -> int:
+    tag = window_tag(plan, k)
+    return sum(1 for name, row in record["lanes"].items()
+               if name != DESK_LANE and row.get("plan_window") == tag)
+
+
+def window_line(plan: dict, k: int) -> str:
+    w = plan_window_row(plan, k) or {}
+    return (f"window {k} of {len(plan.get('windows', []))} of this job's plan: "
+            f"{w.get('lanes', '?')} lane(s), predicted {w.get('predicted', 0):,}"
+            + (" — planned past 60%" if w.get("past_60") else ""))
+
+
+def advance_window(record: dict) -> str | None:
+    """On an inherit: a desk whose window opened every lane it was planned for
+    goes on as the next window (the PLANNED HANDOVER's successor); one that
+    died mid-window goes on as the same window. The line to print."""
+    plan = record.get("plan")
+    if not plan:
+        return None
+    k = int(plan.get("window") or 1)
+    w = plan_window_row(plan, k)
+    if w and opened_in_window(record, plan, k) >= w["lanes"] and plan_window_row(plan, k + 1):
+        plan["window"] = k = k + 1
+    return window_line(plan, k)
+
+
+def desk_meter() -> tuple[str | None, int | None, float | None] | None:
+    """(this window's name, tokens, percent of its window) as the context
+    meter reads the window running this process; tokens and percent None when
+    it cannot be read. None under pytest: a test runs inside whatever window
+    launched it, which is not a desk -- a test that wants a reading
+    monkeypatches this function."""
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return None
+    try:
+        import context_meter
+        session = context_meter.this_window()
+        if session is None:
+            return None, None, None
+        state = context_meter.window_state(session)
+        return state["name"], state["tokens"], state["percent"]
+    except Exception:  # noqa: BLE001 -- a meter never breaks the act it rides on
+        return None, None, None
+
+
+def plan_command(desk: str, lanes: str = "<the lanes this job still opens>") -> str:
+    home = home_name() or "<home>"
+    return (f"`<venv python> scripts/desk_home.py {home} desk_record.py plan --lanes "
+            f"{lanes} [--reading <what the desk still reads>] --desk {desk}`")
+
+
+def handover_text(desk: str, why: str) -> str:
+    home = home_name() or "<home>"
+    return (f"{why} Hand over now:\n"
+            f"  1. write the desk log's `## Handover` section: the job, each open "
+            f"lane and what it is doing, what is owed next\n"
+            f"  2. tell the owner in one plain line: close this desk's tab, then type "
+            f"`/desk` in a fresh window and say \"take over desk {home}\"; it inherits "
+            f"this record (`open-desk --inherit`) and stamps this sheet itself.\n"
+            f"Live lanes keep working. Nothing was stamped.")
+
+
+def generic_check(plan: dict, window: int, opened: int, tokens: int | None,
+                  desk: str = "<you>") -> PlanCheck:
+    """May window `window`, having opened `opened` lanes, stamp one more? The
+    planned count is a prediction, never a stop on its own (FACOWORK's owner,
+    on a desk refused its 10th lane at about 26%: "feels like more babysitting
+    with out value add"). Past it, the load with one more lane is re-predicted:
+    under the line, PLAN CHANGED; over it, PLANNED HANDOVER. Under the count,
+    a meter that says the rest no longer fits is a REPLAN."""
+    w = plan_window_row(plan, window)
+    if w is None:
+        return PlanCheck(False, REPLAN,
+                         f"{REPLAN} — window {window} is past the plan's "
+                         f"{len(plan.get('windows', []))} window(s): re-plan the lanes "
+                         f"this job has left, {plan_command(desk)}. Nothing was stamped.",
+                         window=window)
+    past = bool(w.get("past_60"))
+    line = CEILING_TOKENS if past else LINE_TOKENS
+    per_lane = int(plan.get("per_lane") or PER_LANE_TOKENS)
+    if opened >= int(w["lanes"]):
+        new = opened + 1
+        if tokens is not None:
+            projected = int(round(tokens + per_lane + RESERVE_TOKENS))
+            how = f"{tokens:,} now + one more lane {per_lane:,} + reserve {RESERVE_TOKENS:,}"
+            source = "meter"
+        else:
+            projected = int(w["predicted"]) + per_lane * (new - int(w["lanes"]))
+            how = (f"the plan's {int(w['predicted']):,} for {w['lanes']} lane(s) + "
+                   f"{new - int(w['lanes'])} more x {per_lane:,} (the meter unreadable)")
+            source = "plan"
+        percent = 100 * projected / WINDOW_TOKENS
+        if projected <= line:
+            return PlanCheck(True, PLAN_CHANGED,
+                             f"{PLAN_CHANGED} — window {window} was planned for "
+                             f"{w['lanes']} lane(s) and has opened {opened}; {how} = "
+                             f"{projected:,} ({percent:.1f}%), under {line:,}: window "
+                             f"{window} now takes {new} lane(s), predicted {projected:,}",
+                             window=window, planned_past_60=past, projected=projected,
+                             new_lanes=new, predicted_from=source)
+        return PlanCheck(False, PLANNED_HANDOVER, handover_text(
+            desk, f"{PLANNED_HANDOVER} — window {window} was planned for {w['lanes']} "
+                  f"lane(s) and has opened {opened}, and one more does not fit: {how} = "
+                  f"{projected:,} ({percent:.1f}%), past {line:,}."),
+            window=window, planned_past_60=past, projected=projected,
+            predicted_from=source)
+    if tokens is None:
+        return PlanCheck(True, "OK", f"{METER_UNREADABLE}{desk}", window=window,
+                         planned_past_60=past)
+    left = int(w["lanes"]) - opened
+    projected = int(round(tokens + per_lane * left + RESERVE_TOKENS))
+    if projected <= line:
+        return PlanCheck(True, "OK", f"window {window}: {projected:,} projected",
+                         window=window, planned_past_60=past, projected=projected)
+    earlier = sum(int(x["lanes"]) for x in plan.get("windows", []) if x["k"] < window)
+    job_left = max(int(plan.get("lanes", 0)) - earlier - opened, 1)
+    return PlanCheck(False, REPLAN,
+                     f"{REPLAN} — this window's plan no longer fits: {tokens:,} now + "
+                     f"{left} planned lane(s) x {per_lane:,} + reserve {RESERVE_TOKENS:,} "
+                     f"= {projected:,}, past {line:,}, so its handover comes earlier than "
+                     f"planned. Re-plan the {job_left} lane(s) the job has left from "
+                     f"where this window stands, {plan_command(desk, str(job_left))}, "
+                     f"tell the owner the line it prints, then stamp this lane again. "
+                     f"Nothing was stamped.", window=window, planned_past_60=past,
+                     projected=projected)
+
+
+def plan_check(record: dict, desk: str, lane: str, tokens: int | None) -> PlanCheck:
+    """What the plan says about stamping `lane` now. A desk with no plan
+    stamps nothing: it plans first, and a desk opened before plans existed
+    plans the lanes it has left."""
+    plan = record.get("plan")
+    if not plan:
+        return PlanCheck(False, NO_PLAN,
+                         f"{NO_PLAN} — this desk has not planned its own load, so no "
+                         f"lane is stamped yet. Plan the lanes this job still opens: "
+                         f"{plan_command(desk)}, and tell the owner the line it prints. "
+                         f"Nothing was stamped.")
+    k = int(plan.get("window") or 1)
+    opened = opened_in_window(record, plan, k)
+    existing = record["lanes"].get(lane)
+    if existing and not is_closed(existing) and existing.get("plan_window") == window_tag(plan, k):
+        # A re-stamp is the same lane, not one more.
+        w = plan_window_row(plan, k)
+        opened = min(opened, max(int((w or {}).get("lanes", 1)) - 1, 0))
+    return generic_check(plan, k, opened, tokens, desk)
+
+
+def handover_problem(desk: str, planned_past_60: bool, reading) -> tuple[str | None, str | None]:
+    """(why the stamp refuses for the desk's own fill, a METER UNREADABLE
+    line) -- each None when it does not apply. The backstop: the plan should
+    act first, so a refusal here is a calibration miss. An unreadable meter
+    never refuses."""
+    if reading is None:
+        return None, None
+    _name, tokens, percent = reading
+    if percent is None:
+        return None, f"{METER_UNREADABLE}{desk}"
+    line = CEILING_PERCENT if planned_past_60 else LINE_PERCENT
+    if percent < line:
+        return None, None
+    why = (f"at or past the {CEILING_PERCENT}% line" if line == CEILING_PERCENT
+           else f"at or past the {LINE_PERCENT}% line, and its plan did not put this "
+                f"window past 60%")
+    return handover_text(desk, f"the desk {desk} holds {tokens:,} tokens, {percent}% of "
+                               f"its window -- {why}, so it stamps no more lanes. This "
+                               f"is the backstop; the plan should have acted first."), None
+
+
+def change_plan(plan: dict, planned: PlanCheck) -> str:
+    """A lane let through past its window's planned count: the window's row
+    takes the new count and prediction, kept in `changes` beside the numbers
+    before. Returns the PLAN CHANGED line."""
+    k = int(planned.window or plan.get("window") or 1)
+    w = plan_window_row(plan, k)
+    before, before_predicted = int(w["lanes"]), int(w.get("predicted", 0))
+    w["lanes"], w["predicted"] = int(planned.new_lanes), int(planned.projected)
+    plan["lanes"] = sum(int(x.get("lanes", 0)) for x in plan.get("windows", []))
+    plan["ends_after"] = ends_after(plan.get("windows", []))
+    plan.setdefault("changes", []).append({
+        "at": now_iso(), "window": k, "lanes_before": before, "lanes": w["lanes"],
+        "predicted_before": before_predicted, "predicted": w["predicted"],
+        "predicted_from": planned.predicted_from, "line": planned.message})
+    return planned.message
+
+
+def log_plan_change(line: str) -> None:
+    """The PLAN CHANGED line into the desk log -- the owner's record of it,
+    with no stop for them."""
+    DESK_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with DESK_LOG.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(f"\n## Plan changed, {now_iso()}\n\n{line}\n")
+
+
+def plan_desk(desk: str, lanes: int, reading: Sequence[str] = ()) -> list[str]:
+    """The `plan` act: how many lanes each window of this job takes, written
+    into the record -- before the first stamp, or again from where a live desk
+    stands (it counts from the meter). A plan replaced is kept in
+    `plans_before`; the lanes already stamped count against the new plan's
+    first window only from here on."""
+    record = require_record()
+    require_the_desk(record, desk)
+    paths = [clean_path(p) for p in reading]
+    meter = desk_meter()
+    got = make_plan(lanes, reading_bytes(paths), tokens_now=meter[1] if meter else None)
+    got["reading"] = paths
+    if record.get("plan"):
+        record.setdefault("plans_before", []).append(record["plan"])
+    record["plan"] = got
+    write_record(record)
+    return [*(f"window {w['k']}: {w['lanes']} lane(s), predicted {w['predicted']:,}"
+              + (" — planned past 60%" if w["past_60"] else "") for w in got["windows"]),
+            f"owner line: {got['owner_line']}"]
+
+
 # --- the acts ---------------------------------------------------------------
 
 
@@ -1179,9 +1585,10 @@ def open_desk(desk: str, job: str, *, inherit: bool) -> list[str]:
         was = record.get("desk")
         record["desk"] = desk
         record.setdefault("inherited", []).append({"from": was, "to": desk, "at": now_iso()})
+        window = advance_window(record)
         write_record(record)
         return [f"{desk} is the desk now (was {was}); job: {record.get('job')}",
-                *show_lines(record)]
+                *([f"  {window}"] if window else []), *show_lines(record)]
     if not job.strip():
         raise DeskError("a new desk says what it is for: --job \"<one line>\"")
     record = {
@@ -1192,7 +1599,8 @@ def open_desk(desk: str, job: str, *, inherit: bool) -> list[str]:
     write_record(record)
     return [f"desk {desk} opened: {job.strip()}",
             f"  {len(record['baseline'])} file(s) were already changed and are "
-            f"nobody's lane unless they change again"]
+            f"nobody's lane unless they change again",
+            f"  next, before the first stamp, plan this job's load: {plan_command(desk)}"]
 
 
 def stamp(desk: str, lane: str, sheet: str) -> list[str]:
@@ -1201,12 +1609,19 @@ def stamp(desk: str, lane: str, sheet: str) -> list[str]:
     if not _SAFE_NAME.match(lane) or lane == DESK_LANE:
         raise DeskError(f"{lane!r} cannot be a lane name")
     path, text = read_sheet(sheet)
+    meter = desk_meter()
+    planned = plan_check(record, desk, lane, meter[1] if meter else None)
+    full, unreadable = handover_problem(desk, planned.planned_past_60, meter)
+    if full:
+        raise DeskError(full)
     problems = sheet_problems(text)
     if problems:
         raise DeskError(
             f"{path} is not a sheet a lane could finish:\n"
             + "\n".join(f"  - {p}" for p in problems) + "\nNothing was stamped."
         )
+    if not planned.ok:
+        raise DeskError(planned.message)
     owns = sheet_owns(text)
     hits = collisions(record, lane, owns) + other_desks_collisions(owns)
     if hits:
@@ -1227,9 +1642,17 @@ def stamp(desk: str, lane: str, sheet: str) -> list[str]:
         "owns": owns, "working_since": at, "working_since_iso": now_iso(),
         "closed": None,
     }
+    plan = record["plan"]
+    row = record["lanes"][lane]
+    row["plan_window"] = ((existing or {}).get("plan_window")
+                          or window_tag(plan, int(plan.get("window") or 1)))
+    changed = change_plan(plan, planned) if planned.code == PLAN_CHANGED else None
+    if changed:
+        log_plan_change(changed)
     write_record(record)
     return [f"stamped {path} for {lane} ({record['lanes'][lane]['sha256'][:12]}); "
-            f"{lane} owns {owns}", *(f"  {line}" for line in moved)]
+            f"{lane} owns {owns}", *(f"  {line}" for line in moved),
+            *([changed] if changed else []), *([unreadable] if unreadable else [])]
 
 
 def own(desk: str, lane: str, paths: Sequence[str], *, give: bool) -> list[str]:
@@ -1431,6 +1854,10 @@ def report_done(lane: str, *, dry: bool = False) -> list[str]:
 
 def show_lines(record: dict, lane: str | None = None) -> list[str]:
     lines = [f"desk: {record.get('desk')}  job: {record.get('job')}"]
+    plan = record.get("plan")
+    if not lane:
+        lines.append(f"  plan: {window_line(plan, int(plan.get('window') or 1))}" if plan
+                     else f"  plan: {NO_PLAN} -- the stamp refuses until the desk plans")
     for name, row in sorted(record["lanes"].items()):
         if lane and name != lane:
             continue
@@ -1519,7 +1946,7 @@ def archive_desk(desk: str) -> Path:
 #: The acts only the desk performs. Each ends with the stall banner, so the desk
 #: is shown a lane stopped at a pop-up by the commands it runs anyway -- it does
 #: not have to remember to look (the 2026-09-19 rehearsal, finding 2).
-DESK_ACTS = ("open-desk", "stamp", "own", "disown", "outside", "route")
+DESK_ACTS = ("open-desk", "plan", "stamp", "own", "disown", "outside", "route")
 
 
 def no_home_problem(inherit: bool) -> str | None:
@@ -1581,6 +2008,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("--job", default="", help="one line: what this desk is for")
     sub.add_argument("--inherit", action="store_true",
                      help="take over a record whose desk window is gone")
+    sub = desk_act("plan", "plan this desk's own load: how many lanes each window takes")
+    sub.add_argument("--lanes", type=int, required=True,
+                     help="how many lanes this job still opens")
+    sub.add_argument("--reading", nargs="*", default=[],
+                     help="what the desk itself still reads, beyond the lanes")
     sub = desk_act("stamp", "check a task sheet, record it, and give the lane its files")
     sub.add_argument("lane")
     sub.add_argument("sheet")
@@ -1621,6 +2053,8 @@ def main(argv: Sequence[str] = ()) -> int:
             if problem:
                 raise DeskError(problem)
             said = open_desk(args.desk, args.job, inherit=args.inherit)
+        elif args.act == "plan":
+            said = plan_desk(args.desk, args.lanes, args.reading)
         elif args.act == "stamp":
             said = stamp(args.desk, args.lane, args.sheet)
         elif args.act in ("own", "disown"):

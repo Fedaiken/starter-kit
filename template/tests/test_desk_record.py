@@ -104,6 +104,7 @@ def sheet(repo, name="lane-alpha", text=SHEET):
 @pytest.fixture
 def desk(repo):
     dr.open_desk(DESK, "a test job", inherit=False)
+    dr.plan_desk(DESK, 10)
     dr.stamp(DESK, "lane-alpha", sheet(repo))
     return repo
 
@@ -309,6 +310,7 @@ def test_a_bad_tokens_file_stops_the_stamp_with_exit_2(repo, monkeypatch, capsys
         raise dr.DeskError("scripts/reason_tokens.json: is not JSON")
     monkeypatch.setattr(dr, "reason_lists", broken)
     dr.open_desk(DESK, "job", inherit=False)
+    dr.plan_desk(DESK, 10)
     assert dr.main(["stamp", "lane-alpha", sheet(repo), "--desk", DESK]) == 2
     assert "reason_tokens.json" in capsys.readouterr().err
     assert "lane-alpha" not in dr.read_record()["lanes"]
@@ -337,6 +339,7 @@ def test_an_unknown_reason_is_refused(repo):
 
 def test_a_refused_stamp_writes_nothing(repo):
     dr.open_desk(DESK, "job", inherit=False)
+    dr.plan_desk(DESK, 10)
     with pytest.raises(dr.DeskError, match="Nothing was stamped"):
         dr.stamp(DESK, "lane-alpha", sheet(repo, text=SHEET.replace("done:", "finish:")))
     assert "lane-alpha" not in dr.read_record()["lanes"]
@@ -408,6 +411,7 @@ def test_a_refused_marker_names_each_character_it_found(repo):
 
 def test_a_marker_on_an_owns_line_is_never_recorded_as_a_path(repo):
     dr.open_desk(DESK, "job", inherit=False)
+    dr.plan_desk(DESK, 10)
     with pytest.raises(dr.DeskError, match=MARKER_SAID) as caught:
         dr.stamp(DESK, "lane-alpha", sheet(repo, text=sheet_with("owns", MARKER_LINE)))
     assert "Nothing was stamped" in str(caught.value)
@@ -423,6 +427,7 @@ def test_a_sheet_with_the_marker_deleted_and_the_paths_real_still_stamps(repo):
         "- sources/statement_3.md\n- skills/reconciliation/shard_backfill.md\n")
     assert dr.sheet_problems(text, repo) == []
     dr.open_desk(DESK, "job", inherit=False)
+    dr.plan_desk(DESK, 10)
     dr.stamp(DESK, "lane-alpha", sheet(repo, text=text))
     assert dr.read_record()["lanes"]["lane-alpha"]["owns"] == [
         "records/2025/January", "work/2025/reports/january-apply.md",
@@ -456,6 +461,7 @@ def test_a_marker_that_already_reached_the_record_can_still_be_taken_back_out(de
 
 def test_the_command_line_refuses_a_marker_with_exit_2(repo, capsys):
     dr.open_desk(DESK, "job", inherit=False)
+    dr.plan_desk(DESK, 10)
     text = sheet_with("owns", MARKER_LINE)
     sheet(repo, text=text)
     assert dr.main(["stamp", "lane-alpha", "coordination/task_sheets/lane-alpha.md",
@@ -509,6 +515,7 @@ def test_own_and_disown_change_the_file_and_print_the_line_to_send(desk):
 def test_a_second_desk_is_refused_and_a_replacement_inherits(desk):
     with pytest.raises(dr.DeskError, match="already on file"):
         dr.open_desk("new-desk", "job", inherit=False)
+        dr.plan_desk("new-desk", 10)
     dr.open_desk("new-desk", "", inherit=True)
     record = dr.read_record()
     assert record["desk"] == "new-desk" and "lane-alpha" in record["lanes"]
@@ -611,6 +618,7 @@ def stopped(repo, monkeypatch):
     tick as everything after it."""
     monkeypatch.setattr(dr, "time", types.SimpleNamespace(time=lambda: STOPPED_AT))
     dr.open_desk(DESK, "a test job", inherit=False)
+    dr.plan_desk(DESK, 10)
     dr.stamp(DESK, "lane-alpha", sheet(repo))
     return repo
 
@@ -971,6 +979,7 @@ def test_what_was_already_dirty_is_nobodys_until_it_changes_again(repo, capsys):
     inbox.parent.mkdir()
     inbox.write_text("the owner's own drop\n", encoding="utf-8")
     dr.open_desk(DESK, "job", inherit=False)
+    dr.plan_desk(DESK, 10)
     assert co.main([]) == 0
     inbox.write_text("and now a lane has been in here, at more length\n", encoding="utf-8")
     assert co.main([]) == 1
@@ -1056,3 +1065,156 @@ def test_every_desk_act_ends_with_the_stall_banner(desk, monkeypatch, capsys):
     assert "NEEDS THE OWNER" in capsys.readouterr().out
     assert dr.main(["show"]) == 0  # a lane runs this one; it carries no banner
     assert "NEEDS THE OWNER" not in capsys.readouterr().out
+
+
+# --- the desk plans its own load, and hands over on predicted load --------------------
+
+
+def opened_desk(repo):
+    dr.open_desk(DESK, "a planned job", inherit=False)
+    return repo
+
+
+def second(repo, name):
+    text = SHEET.replace("lane-alpha", name).replace(
+        "records/2025/January\n- records/2025/February/", f"records/{name}")
+    return sheet(repo, name, text)
+
+
+def reading(monkeypatch, tokens):
+    monkeypatch.setattr(dr, "desk_meter", lambda: (DESK, tokens, None if tokens is None
+                                                   else round(100 * tokens / dr.WINDOW_TOKENS, 1)))
+
+
+def test_a_desk_with_no_plan_stamps_nothing_and_is_told_the_command(repo):
+    opened_desk(repo)
+    with pytest.raises(dr.DeskError) as refused:
+        dr.stamp(DESK, "lane-alpha", sheet(repo))
+    said = str(refused.value)
+    assert said.startswith(dr.NO_PLAN) and "desk_record.py plan --lanes" in said
+    assert "lane-alpha" not in dr.read_record()["lanes"]
+
+
+def test_open_desk_names_the_plan_as_the_next_act(repo):
+    said = dr.open_desk(DESK, "a job", inherit=False)
+    assert any("desk_record.py plan --lanes" in line for line in said)
+
+
+def test_a_live_desk_opened_without_a_plan_plans_itself_and_then_stamps(repo, capsys):
+    opened_desk(repo)
+    assert dr.main(["plan", "--lanes", "3", "--desk", DESK]) == 0
+    out = capsys.readouterr().out
+    assert "window 1: 3 lane(s)" in out and "fits in one desk window" in out
+    assert dr.read_record()["plan"]["lanes"] == 3
+    dr.stamp(DESK, "lane-alpha", sheet(repo))
+    assert dr.read_record()["lanes"]["lane-alpha"]["plan_window"].endswith("#1")
+
+
+def test_the_plan_is_the_desks_act():
+    assert "plan" in dr.DESK_ACTS
+
+
+def test_a_plan_cuts_a_big_job_into_windows_by_the_per_lane_cost():
+    cap = (dr.LINE_TOKENS - dr.START_TOKENS - dr.RESERVE_TOKENS) // dr.PER_LANE_TOKENS
+    got = dr.make_plan(cap + 2)
+    assert [w["lanes"] for w in got["windows"]] == [cap, 2]
+    assert got["ends_after"] == [cap] and "two desk windows" in got["owner_line"]
+    assert all(not w["past_60"] for w in got["windows"])
+
+
+def test_a_plan_counts_from_the_meter_when_it_can_read_it():
+    got = dr.make_plan(5, tokens_now=500_000)
+    assert got["windows"][0]["lanes"] == (600_000 - 500_000 - dr.RESERVE_TOKENS) // dr.PER_LANE_TOKENS
+
+
+def test_a_window_that_cannot_take_one_lane_under_the_line_is_planned_past_60():
+    got = dr.make_plan(1, tokens_now=595_000)
+    assert got["windows"][0]["past_60"] and "it stops for certain at 70%" in got["owner_line"]
+    with pytest.raises(dr.DeskError, match="cannot take one lane even at the"):
+        dr.make_plan(1, tokens_now=690_000)
+
+
+def test_one_lane_past_the_planned_count_that_fits_is_plan_changed_and_logged(repo, monkeypatch):
+    opened_desk(repo)
+    dr.plan_desk(DESK, 1)
+    dr.stamp(DESK, "lane-alpha", sheet(repo))
+    reading(monkeypatch, 200_000)
+    said = dr.stamp(DESK, "lane-beta", second(repo, "lane-beta"))
+    changed = [line for line in said if line.startswith(dr.PLAN_CHANGED)]
+    assert changed and "now takes 2 lane(s)" in changed[0]
+    plan = dr.read_record()["plan"]
+    assert plan["windows"][0]["lanes"] == 2 and plan["changes"][0]["lanes_before"] == 1
+    assert "## Plan changed" in dr.DESK_LOG.read_text(encoding="utf-8")
+
+
+def test_one_lane_past_the_count_that_does_not_fit_is_a_planned_handover(repo, monkeypatch):
+    opened_desk(repo)
+    dr.plan_desk(DESK, 1)
+    dr.stamp(DESK, "lane-alpha", sheet(repo))
+    reading(monkeypatch, 560_000)
+    with pytest.raises(dr.DeskError) as refused:
+        dr.stamp(DESK, "lane-beta", second(repo, "lane-beta"))
+    said = str(refused.value)
+    assert said.startswith(dr.PLANNED_HANDOVER) and "## Handover" in said
+    assert "open-desk --inherit" in said and "Nothing was stamped" in said
+    assert "lane-beta" not in dr.read_record()["lanes"]
+
+
+def test_under_the_count_a_meter_that_says_the_rest_no_longer_fits_is_replan(repo, monkeypatch):
+    opened_desk(repo)
+    dr.plan_desk(DESK, 10)
+    reading(monkeypatch, 500_000)
+    with pytest.raises(dr.DeskError) as refused:
+        dr.stamp(DESK, "lane-alpha", sheet(repo))
+    assert str(refused.value).startswith(dr.REPLAN) and "plan --lanes 10" in str(refused.value)
+
+
+def test_a_restamp_is_the_same_lane_not_one_more(repo, monkeypatch):
+    opened_desk(repo)
+    dr.plan_desk(DESK, 1)
+    path = sheet(repo)
+    dr.stamp(DESK, "lane-alpha", path)
+    reading(monkeypatch, 400_000)       # counted as one MORE, it would be PLAN CHANGED
+    said = dr.stamp(DESK, "lane-alpha", path)
+    assert not any(line.startswith(dr.PLAN_CHANGED) for line in said)
+    assert dr.read_record()["plan"]["windows"][0]["lanes"] == 1
+
+
+@pytest.mark.parametrize("percent, past_60, refused", [
+    (59.9, False, False), (60.0, False, True), (65.0, True, False), (70.0, True, True)])
+def test_the_backstop_refuses_at_60_or_at_70_when_planned_past_60(percent, past_60, refused):
+    full, unreadable = dr.handover_problem(DESK, past_60, (DESK, int(percent * 10_000), percent))
+    assert bool(full) is refused and unreadable is None
+    if full:
+        assert "backstop" in full and "Nothing was stamped" in full
+
+
+def test_an_unreadable_meter_never_refuses_and_says_so(repo, monkeypatch):
+    assert dr.handover_problem(DESK, False, None) == (None, None)
+    assert dr.handover_problem(DESK, False, (None, None, None)) == (
+        None, f"{dr.METER_UNREADABLE}{DESK}")
+    opened_desk(repo)
+    dr.plan_desk(DESK, 2)
+    monkeypatch.setattr(dr, "desk_meter", lambda: (None, None, None))
+    said = dr.stamp(DESK, "lane-alpha", sheet(repo))
+    assert said[-1] == f"{dr.METER_UNREADABLE}{DESK}"
+
+
+def test_a_replacement_desk_goes_on_as_the_next_window_once_the_first_is_spent(repo):
+    opened_desk(repo)
+    record = dr.read_record()
+    record["plan"] = dr.make_plan(1)
+    record["plan"]["windows"].append({"k": 2, "lanes": 3, "predicted": 100_000,
+                                      "past_60": False})
+    dr.write_record(record)
+    dr.stamp(DESK, "lane-alpha", sheet(repo))
+    said = dr.open_desk("new-desk", "", inherit=True)
+    assert "window 2 of 2" in said[1]
+    assert dr.read_record()["plan"]["window"] == 2
+
+
+def test_show_names_the_plan_or_its_absence(repo):
+    opened_desk(repo)
+    assert any(dr.NO_PLAN in line for line in dr.show(None))
+    dr.plan_desk(DESK, 4)
+    assert any("window 1 of 1 of this job's plan: 4 lane(s)" in line for line in dr.show(None))

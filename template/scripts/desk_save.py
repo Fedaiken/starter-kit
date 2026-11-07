@@ -46,6 +46,13 @@ to remember, in the only order that works:
      back, so the save simply runs again;
   4. `git push origin main`.
 
+In a project with `scripts/backlog.py` (the backlog ledger), step 1 also
+refuses a desk log whose `## Logged for later` bullets are out of shape or
+name no blocker, and step 3 puts each bullet on `backlog.md` -- its short
+line, parked until its blocker, pointing at its line in the archived log --
+in the same commit (backlog.py's docstring, LOGGED FOR LATER). Without that
+script the save does none of this.
+
 This file is kit-owned: identical in every project the Starter Kit seeds, and
 an improvement made here goes back with `<venv python> scripts/kit_sync.py push
 scripts/desk_save.py`.
@@ -62,8 +69,10 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import importlib
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Sequence
 
@@ -151,6 +160,35 @@ def unrender(before: bytes | None, new: Sequence[str] = ()) -> None:
         index.write_bytes(before)
 
 
+#: The backlog ledger's script. A project without it saves as before.
+LEDGER_SCRIPT = Path("scripts") / "backlog.py"
+
+
+def backlog_module():
+    """backlog.py, when this project has it; else None."""
+    if not (dr.REPO / LEDGER_SCRIPT).is_file():
+        return None
+    return importlib.import_module("backlog")
+
+
+def logged_refusal(bl) -> str | None:
+    """Why the desk log's Logged-for-later bullets cannot go on the ledger, or
+    None. Run before the desk is closed, so a refusal leaves the room as it was."""
+    if bl is None or not dr.DESK_LOG.is_file():
+        return None
+    log = dr.DESK_LOG.relative_to(dr.REPO).as_posix()
+    problems = bl.logged_problems(dr.DESK_LOG.read_text(encoding="utf-8"), log)
+    try:
+        bl.read(dr.REPO / bl.LEDGER_REL)
+    except bl.Refused as exc:
+        problems.append(str(exc))
+    if not problems:
+        return None
+    return ("\n".join(f"  {p}" for p in problems)
+            + f"\nREFUSED - nothing was closed and nothing was saved. Each Logged-for-later bullet is "
+              f"`{bl.BULLET_SHAPE}`; work nothing outside the job blocks is done in the job.")
+
+
 def owned_changes(record: dict) -> tuple[list[str], list[str], list[str]]:
     """(paths this desk saves, ownership failures, paths that are another window's)."""
     changed = dr.changed_since_baseline(record)
@@ -220,6 +258,13 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
               "was closed and nothing was saved. Fix the document, or give it a "
               "row in doc_budgets.yaml, then save again.", file=sys.stderr)
         return 1
+    bl = backlog_module()
+    refusal = logged_refusal(bl)
+    if refusal is not None:
+        if rendered:
+            unrender(before)
+        print(refusal, file=sys.stderr)
+        return 1
     for path in theirs:
         print(f"left alone (another window's): {path}")
     if dry_run:
@@ -237,6 +282,30 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
     target = dr.archive_desk(desk)
     print(f"desk closed; its record is under {target.relative_to(dr.REPO).as_posix()}")
 
+    # The desk log's Logged-for-later bullets go on the backlog ledger, each
+    # pointing at its line in the archived log (checked before the close).
+    ledger_before = None
+    ledger_moved = False
+    archived_log = target / dr.DESK_LOG.name
+    if bl is not None and archived_log.is_file():
+        ledger_path = dr.REPO / bl.LEDGER_REL
+        ledger_before = ledger_path.read_bytes() if ledger_path.is_file() else None
+        try:
+            ledger = bl.read(ledger_path)
+            added = bl.move_logged(ledger, archived_log.read_text(encoding="utf-8"),
+                                   archived_log.relative_to(dr.REPO).as_posix(), f"desk {desk}",
+                                   date.today().isoformat(), dr.REPO)
+        except bl.Refused as exc:
+            print(f"FAIL - the backlog ledger did not take the logged bullets: {exc}", file=sys.stderr)
+            if rendered:
+                unrender(before)
+            return restore(target, [])
+        if added:
+            bl.write(ledger_path, ledger)
+            ledger_moved = True
+            print(f"logged for later: {len(added)} item(s) parked on {bl.LEDGER_REL} "
+                  f"({', '.join(e.id for e in added)})")
+
     # Closing moved files within the desk's home, so the list is taken again:
     # what this desk owned and is still changed, plus everything in its home
     # that no other live desk holds (a desk left at `coordination/` has the
@@ -245,6 +314,7 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
     now = dr.git_changed()
     others = dr.other_desks()
     paths = sorted({p for p in now if p in set(mine) or (rendered and p == KB_INDEX)
+                    or (ledger_moved and p == bl.LEDGER_REL)
                     or (dr.covers(dr.HOME, p) and dr.another_desks_claim(p, others) is None)})
     paths = [p for p in paths if p not in set(theirs)]
     if not paths:
@@ -264,6 +334,14 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
         print(f"FAIL - {failed}", file=sys.stderr)
         if rendered:
             unrender(before, new)
+        if ledger_moved:
+            ledger_path = dr.REPO / bl.LEDGER_REL
+            if bl.LEDGER_REL in new:
+                git(dr.REPO, "reset", "-q", paths=[bl.LEDGER_REL])
+            if ledger_before is None:
+                ledger_path.unlink()
+            else:
+                ledger_path.write_bytes(ledger_before)
         return restore(target, new)
     print(f"SAVED - {len(paths)} path(s) in one commit: {message}")
     if not push:

@@ -61,6 +61,12 @@ entries:
                          # now refuses a digit outside backticks in a Status cell.
     rule: Status rows only — a status word, the missing document, a backticked pointer. A document's contents belong in the kb entry or folder digest the cell points to.
 
+  - path: backlog.md
+    tier: 2              # loaded when close-session fires: its backlog step reads it every session.
+    budget: 8000         # {{KIT:DATE}}: seeded. Holds about 25 open entries at backlog.py's ENTRY_CAP
+                         # (tests/test_backlog.py renders that ledger against this ceiling).
+    rule: Written only by scripts/desk_save.py and scripts/backlog.py. Over the ceiling, route entries off it -- done, dropped, or a desk job that closes them -- through close-session's backlog step; never trim it by hand.
+
   - glob: skills/*/SKILL.md
     tier: 2
     budget: 20000

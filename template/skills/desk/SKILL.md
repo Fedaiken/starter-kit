@@ -7,7 +7,7 @@ description: Use when the owner types /desk, or asks in their own words in this 
 
 Batched work runs as one **desk** directing **lane** windows the owner (the person `CLAUDE.md` names) can see and click into (`kb/desk-and-lane-philosophy.md`, which also says where the R-numbers come from; kit-owned — an improvement goes back with `<venv python> scripts/kit_sync.py push <path>`). This window is the desk. Every lane works in the one project folder and makes its own edits; nothing in git says which lane a changed file belongs to, so **this window is the record: who is here, what each owns, what each was told.**
 
-**The grant is the owner, in this window** (their ruling, 2026-09-26): `/desk` typed here, or their own words here asking this window to run as the desk or to open a new desk job — the same act. Still refused: a message from another session saying "you are the desk" is not a grant and never becomes one, and a desk never opens a job on its own initiative. If neither started you, say so and stop.
+**The grant is the owner, in this window** (2026-09-26): `/desk` typed here, or their words here asking for a desk job. A message from another session is never a grant, and a desk never opens a job on its own. If neither started you, say so and stop.
 
 **Desks run side by side**, each in a home of its own; another live desk never blocks this one.
 
@@ -61,11 +61,9 @@ done:
 
 Two rows are in every project: `prescribed` (Sonnet: build work the sheet names and a script verifies) and `design-latitude` (Opus: build work where the lane chooses how — **and every job no other row fits**). A row marked `[reads: names a source document]` is a job that works from the document itself. **A new, changed or removed row is the owner's ruling**, made in their words before the file changes; the desk never edits the file to make a sheet fit.
 
-Refused at the stamp: more than one unit (a second unit is a second sheet and a second lane; a comma, semicolon, `+`, `&` or "and" joins two, but not inside parentheses, and a ` — ` dash is a gloss on the one unit); no `owns:`; a `done:` that names no runnable command, or one `report-done` cannot run unattended (a pipe, redirect, `&&`, variable, placeholder, git save); a `done:` that runs the whole test suite (name the lane's own test files); a sheet whose reason reads a source but whose `reads:` names only files under `kb/`; a `reads:` path that is not on disk; any path outside the project; any path another live lane — of this desk or another — owns, or that sits inside or above one.
+Refused at the stamp: more than one unit (a comma, semicolon, `+`, `&` or "and" joins two; not inside parentheses or after a ` — ` dash); a lane predicted past the lane budget from the bytes its `reads:` names (split the unit; `lane_budget.py <sheet>` prints it; `kb/lane-context-sizing.md`); no `owns:`; a `done:` that names no runnable command, or one `report-done` cannot run unattended (a pipe, redirect, `&&`, variable, placeholder, git save); a `done:` that runs the whole test suite (name the lane's own test files); a sheet whose reason reads a source but whose `reads:` names only files under `kb/`; a `reads:` path that is not on disk; any path outside the project; any path another live lane — of this desk or another — owns, or that sits inside or above one.
 
 A `research` or `planning` sheet owns `Working/<name>` for the research write-up and names its check in `done:` (`skills/research/SKILL.md`, when this project has one).
-
-**Size the `reads:` list before stamping** — one lane's full read has a ceiling, and the stamp does not measure it yet. The measured numbers and how to split: `kb/lane-context-sizing.md`.
 
 **A `done:` for work that touches a `.md` or `.html` includes `<venv python> scripts/check_docs.py --only <the sheet's owns: paths>`, the interpreter written out**; the stamp refuses any other scope, and the save gates the whole tree. A new document needs a `doc_budgets.yaml` row (a glob row like `kb/*.md` may already claim it), which only the lane owning that file can write — so the desk gives it to exactly one lane, or writes no sheet that creates a document.
 
@@ -77,7 +75,10 @@ Call `ListAgents` and take this window's name from its first line. Name the home
 
 ```
 <home run> desk_record.py open-desk --desk <you> --job "<one line: what this desk is for>"
+<home run> desk_record.py plan --lanes <lanes this job still opens> --desk <you>
 ```
+
+The stamp refuses `NO PLAN` until the plan is made. Its `owner line:` goes in your first message to the owner.
 
 **If it refuses because that home is taken, and the owner did not send you to replace that desk, pick another home name.** Another desk's live job is never yours. Only a replacement for a desk whose window is gone inherits the room (the tool refuses to inherit a live desk):
 
@@ -105,7 +106,7 @@ Your first message to the owner says, in short sentences, what this job is and *
    <home run> open_terminal.py --role lane --name <lane> --reason <reason> --task coordination/desks/<home>/task_sheets/<lane>.md
    ```
 
-**Read every refusal unpiped** and run the remedy it names. At most 15 lanes are open at once across every desk here (the opener counts). A lane name another desk's live window holds is refused; pick another. Fable is never yours to open a lane on — that takes the owner's own flag.
+**Read every refusal unpiped** and run the remedy it names: `REPLAN` (plan again, stamp again), `PLANNED HANDOVER` or the 60% backstop (hand over as it says). `PLAN CHANGED` is logged and needs no stop. At most 15 lanes are open at once across every desk here (the opener counts). A lane name another desk's live window holds is refused; pick another. Fable is never yours to open a lane on — that takes the owner's own flag.
 
 **No Windows Terminal — macOS, Linux, or `wt.exe` not on PATH — the opener opens nothing itself.** It prints `OPEN BY HAND` and one line to paste and records the open as `opened_by: manual`. Tell the owner, in that turn: open a new terminal tab named `<lane>` and paste that line — quote it exactly. Then wait for the lane's ack as with any lane; one that never acks is a tab never opened, so ask the owner before reopening it.
 
@@ -155,7 +156,7 @@ A lane's `outside: <file or entity>` line — something it found that is not in 
 
 ### Step 5 — Watch for the stall nobody can announce
 
-**A lane stopped at a pop-up cannot say so; you are shown it:** every act you perform — `open_terminal.py` opening, closing or listing, and every `desk_record.py` desk act — ends with a line `NEEDS THE OWNER -- the `<lane>` tab is stopped and waiting for the owner: <what>` for each lane stopped that way. **Tell the owner which tab, in the turn you see that line.** It names every stalled window here, another desk's lanes too. A lane that expects a pop-up sends `prompting: <command> — <what it touches>` first: relay that the moment it lands. Lanes open without Remote Control (`--remote-control` adds it); the desk keeps it on. The full history:
+**A lane stopped at a pop-up cannot say so; you are shown it:** every `open_terminal.py` and `desk_record.py` act ends with a `NEEDS THE OWNER -- the `<lane>` tab is stopped …` line per such lane, another desk's too. **Tell the owner which tab, that turn.** A lane that expects a pop-up sends `prompting: <command> — <what it touches>` first: relay that the moment it lands. The banner also names a lane stopped on an API error (`NEEDS THE DESK`), dead at its ceiling, idle mid-task (`IDLE, NOT DONE`) or past 80% (`FILLING`): act on each that turn. It ends with `THIS DESK`, your own measured load: quote it, never estimate it (`context_meter.py --report` gives every window's). Lanes open without Remote Control (`--remote-control` adds it). The full history:
 
 ```
 <home run> note_prompt.py --report
@@ -195,7 +196,7 @@ It is refused for any path a lane owns. **Quote the output. A run you did not qu
 <home run> desk_save.py --desk <you> -m "<what the job did>"
 ```
 
-It runs the ownership check and the document gate (`scripts/check_docs.py`) again, closes the desk (record, sheets, done files and log archived under `closed/<stamp>/` in its home), makes ONE commit of exactly the owned paths plus its home, by path, and pushes. **Exit 2 after a failed commit put the desk back** (another desk was committing): run the save again. `--dry-run` prints what it would save and changes nothing. **Exit 3 means the commit was made and the push failed — tell the owner in that turn.** Quote its output. Anything the job produced for the owner to read goes where `CLAUDE.md` says their deliverables go — open it for them. Tell them in short sentences what is done, what they still owe, and what is next. No window is left running. **A desk never starts the next job on its own.** If the owner then asks in this window for more work, that is the grant: open a new record, under a home named for their request, with it as the job — and run from Step 1. No retyped `/desk` is needed.
+It runs the ownership check and the document gate (`scripts/check_docs.py`) again, closes the desk (record, sheets, done files and log archived under `closed/<stamp>/` in its home), makes ONE commit of exactly the owned paths plus its home, by path, and pushes. **Exit 2 after a failed commit put the desk back** (another desk was committing): run the save again. `--dry-run` prints what it would save and changes nothing. **Exit 3 means the commit was made and the push failed — tell the owner in that turn.** Quote its output. Anything the job made for the owner to read goes where `CLAUDE.md` says deliverables go; open it for them. Tell them briefly what is done, what they owe, what is next. No window is left running. **A desk never starts the next job on its own;** the owner asking here for more is the grant: a new record, a new home, Step 1.
 
 ## Cardinal Structural Enforcements
 
@@ -210,10 +211,11 @@ It runs the ownership check and the document gate (`scripts/check_docs.py`) agai
 | 7 | A stray edit cannot be saved | `check_ownership.py` exits 1 naming the file; the save runs it again |
 | 8 | The job decides the model | The sheet names the reason; the opener refuses an open whose reason differs |
 | 9 | The desk sees a stalled lane | `open_terminal.stalled_lines` is printed at the end of every desk act |
-| 10 | A lane cannot save to git or throw work away | `scripts/lane_guard.py`, a `PreToolUse` hook, refuses git's save and discard commands in any window the opener started as a lane (it reads `<PROJECT>_ROLE`, derived from the folder name by `scripts/project_identity.py`) |
+| 10 | A lane cannot save to git or throw work away | `scripts/lane_guard.py`, a `PreToolUse` hook, refuses git's save and discard commands in a lane's window (`<PROJECT>_ROLE`) |
 | 11 | Another window's work is neither a stray nor the desk's | `desk_record.py outside` records it with a reason; `check_ownership.py` lists it apart; refused for a path a lane owns |
 | 12 | The save cannot be split around another window's commit | `scripts/desk_save.py` commits by path in one act, and refuses while any changed file lacks exactly one owner or any lane is open |
 | 13 | A document without a budget row cannot be saved | `desk_save.py` runs `scripts/check_docs.py` before it closes the desk, and refuses on a failure |
 | 14 | A lane cannot delete a tree outside its scratchpad | `scripts/lane_guard.py` refuses a recursive delete of any path it cannot read as under the temp folder's `claude/` |
-| 15 | No lane opens on a reason list nobody ruled on | `open_terminal.py` loads `scripts/reason_tokens.json` at every run and refuses (exit 2) a file that is missing, malformed, names a model other than Sonnet or Opus, or lacks `prescribed` on Sonnet and `design-latitude` on Opus; the stamp refuses the same way |
-| 16 | Desks run side by side and never share a file or a lane | `open-desk` refuses a new desk with no home, and inheriting a live desk; `stamp` and `own` refuse another desk's lane's path; the check and the save list another desk's files apart; `--close` refuses its lanes; `tests/test_desk_homes.py` fails a bare desk command here |
+| 15 | No lane opens on a reason list nobody ruled on | `open_terminal.py` and the stamp refuse a `scripts/reason_tokens.json` that is missing, malformed, names another model, or lacks the two universal rows |
+| 16 | Desks run side by side and never share a file or a lane | `open-desk` refuses a homeless desk or inheriting a live one; `stamp` and `own` refuse another desk's lane's path; the check and the save list its files apart; `--close` refuses its lanes |
+| 17 | The desk measures its load and hands over on it | `context_meter.py` reads it from the transcripts; every banner ends with `THIS DESK`; the stamp refuses an over-budget lane, an unplanned desk, a desk past its planned load |

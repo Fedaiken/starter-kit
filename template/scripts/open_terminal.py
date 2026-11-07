@@ -93,6 +93,18 @@ the taken-name check. It waits for a visible-tab measurement of that. The dry
 run prints which, and the record carries `remote_control: true|false`, because
 the `wt.exe` line shows the argv only as an encoded blob.
 
+EVERY ACT ENDS WITH WHAT NEEDS THE DESK, THEN THE DESK'S OWN FIGURE
+--------------------------------------------------------------------
+Ported 2026-11-02 from FACOWORK's opener (the owner, that day: "it jsut means you
+are not really tracking context accurately"). :func:`stalled_lines` prints a
+lane at a pop-up (NEEDS THE OWNER), a lane stopped on an API error (NEEDS THE
+DESK), one dead at its ceiling, one whose turn ended mid-task three minutes ago
+or more with no `done:` and no `question:` (IDLE, NOT DONE), one past 80%
+(FILLING), and last `THIS DESK — <name> <tokens> tokens, <n>% of its window —
+plan: ...`, measured by `scripts/context_meter.py` from the transcripts, never
+guessed. An unreadable figure prints METER UNREADABLE. `--list` adds each
+window's measured share.
+
 THE RECORD
 ----------
 Every open and every close appends one line to
@@ -119,7 +131,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic, sleep
 from typing import NamedTuple, Sequence
@@ -957,8 +969,10 @@ def list_windows() -> int:
     if not live_here:
         print("no live Claude session in this workspace")
         return 0
+    meters = window_meters(live_here)
     print(f"{len(live_here)} live in this workspace "
-          f"(cap on lanes open at once: {MAX_OPEN_LANES})")
+          f"(cap on lanes open at once: {MAX_OPEN_LANES}); each window's share of "
+          f"its context window, measured")
     for row in sorted(live_here, key=lambda r: str(r.get("name"))):
         name = str(row.get("name"))
         entry = latest.get(name)
@@ -968,8 +982,9 @@ def list_windows() -> int:
                     + (f", desk home {entry['home']}" if entry.get("home") else ""))
         else:
             what = "not opened by this launcher (the owner's own window, or a desk they started)"
-        print(f"  {name:<24} {str(row.get('status')):<6} {what}")
-    for line in stalled_lines(live_here):
+        print(f"  {name:<24} {str(row.get('status')):<6} "
+              f"{meter_text(row, meters.get(name)):<8} {what}")
+    for line in stalled_lines(live_here, meters=meters, listed=True):
         print(line)
     return 0
 
@@ -983,37 +998,277 @@ STALLED_STATUS = "waiting"
 NEEDS_OWNER = "NEEDS THE OWNER"
 
 
-def stalled_lines(live_here: Sequence[dict] | None = None) -> list[str]:
-    """One loud line per window that is stopped waiting for the owner.
+#: What the CLI reports for a session between turns.
+IDLE_STATUS = "idle"
+
+#: A lane at this share of its window is FILLING: FACOWORK's line, 80%.
+FILLING_PERCENT = 80
+
+#: A lane whose last turn ended this long ago with no `done:` and no
+#: `question:` is IDLE, NOT DONE; short of it, it may only be between turns.
+IDLE_NOT_DONE_MINUTES = 3
+
+#: The reports that end a lane's work for now: finished, or waiting on the
+#: desk (skills/lane/SKILL.md). A turn that said any of them is not flagged.
+WAITING_REPORTS = frozenset({"done", "question", "prompting"})
+
+UNREADABLE = "METER UNREADABLE — "
+DESK_LINE = "THIS DESK"
+WINDOW_LINE = "THIS WINDOW"
+
+
+def window_meters(live_here: Sequence[dict]) -> dict[str, dict | None]:
+    """Each live window's `context_meter.window_state`, by name; None for a
+    window whose meter could not be read at all. Best effort."""
+    try:
+        import context_meter
+    except Exception:  # noqa: BLE001 -- no meter is an unreadable meter
+        return {str(row.get("name")): None for row in live_here}
+    meters: dict[str, dict | None] = {}
+    for row in live_here:
+        try:
+            meters[str(row.get("name"))] = context_meter.window_state(row)
+        except Exception:  # noqa: BLE001
+            meters[str(row.get("name"))] = None
+    return meters
+
+
+def not_measured_yet(row: dict, state: dict | None) -> bool:
+    """A busy window with no reading is mid its first turn -- no assistant turn
+    is on its transcript yet -- not a broken meter."""
+    return (str(row.get("status") or "").strip().lower() == BUSY_STATUS
+            and (state is None or state.get("tokens") is None))
+
+
+def meter_text(row: dict, state: dict | None) -> str:
+    """The `--list` column: the window's share of its context window."""
+    if state is not None and state.get("percent") is not None:
+        return f"{state['percent']:5.1f}%"
+    if not_measured_yet(row, state):
+        return "starting"
+    return f"{UNREADABLE}{row.get('name')}"
+
+
+def lane_is_done(name: str) -> bool:
+    """Whether the desk record shows `name` reported done since it was last
+    put to work. A window with no row there is not shown as done."""
+    import desk_record
+    try:
+        record = desk_record.read_record()
+    except desk_record.DeskError:
+        return False
+    row = (record or {}).get("lanes", {}).get(name)
+    return bool(row) and desk_record.reported_done(row, name)
+
+
+def when_text(stamp: object) -> str:
+    """A transcript's UTC timestamp in this machine's local time."""
+    try:
+        at = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        return at.astimezone().isoformat(timespec="seconds")
+    except ValueError:
+        return str(stamp)
+
+
+def idle_not_done_line(name: str, state: dict | None,
+                       now: datetime | None = None) -> str | None:
+    """`IDLE, NOT DONE — <lane> idle since <HH:MM>, ...` for a lane of this
+    desk's record whose last turn ended `end_turn` saying neither `done:` nor
+    `question:` / `prompting:`, IDLE_NOT_DONE_MINUTES or more ago; None
+    otherwise. The caller has already found the lane idle, not done since it
+    was last put to work, and not stopped on an API error.
+
+    FACOWORK desk decision DI19, 2026-09-28: a lane ended a turn with "Next:
+    the reconciliation README and router." and sat idle about 27 minutes; it
+    read `idle` like a lane that had finished, and nothing printed. The
+    transcript is read by `context_meter.last_turn`; one it cannot read prints
+    nothing here (METER UNREADABLE covers it)."""
+    import context_meter
+    import desk_record
+    if not desk_record.is_a_lane(name):
+        return None     # another desk's lane, or a window this record never stamped
+    path = context_meter.transcript_path(str((state or {}).get("session_id") or ""))
+    turn = None if path is None else context_meter.last_turn(path)
+    if not turn or turn.get("stop_reason") != "end_turn" \
+            or turn["reports"] & WAITING_REPORTS:
+        return None
+    try:
+        at = datetime.fromisoformat(str(turn.get("at")).replace("Z", "+00:00"))
+        if at.tzinfo is None:
+            at = at.astimezone()
+    except ValueError:
+        return None
+    now = datetime.now(timezone.utc) if now is None else now
+    if (now - at).total_seconds() < IDLE_NOT_DONE_MINUTES * 60:
+        return None
+    return (f"IDLE, NOT DONE — {name} idle since "
+            f"{at.astimezone().strftime('%H:%M')}, no done record, no question: "
+            f"send it [desk] answer: carry on with your unit, then report-done")
+
+
+def meter_lines(live_here: Sequence[dict], rows: Sequence[dict],
+                meters: dict[str, dict | None], *, listed: bool) -> list[str]:
+    """One line per lane this opener opened that needs the desk.
+
+    A LANE STOPPED ON AN API ERROR LOOKS LIKE A LANE THAT FINISHED ITS TURN:
+    both read `idle` (FACOWORK, Session 55: "draftchekc got stuck and you
+    didn't see it"). The transcript says which: its last entry. An idle lane
+    with no error whose last turn ended mid-task is IDLE, NOT DONE. `listed`
+    is `--list`, whose rows already show each window's meter."""
+    import context_meter
+
+    latest = latest_by_name(rows)
+    lanes = [row for row in live_here
+             if latest.get(str(row.get("name")), {}).get("event") == "open"
+             and latest[str(row.get("name"))].get("role") == LANE_ROLE]
+    lines = []
+    for row in sorted(lanes, key=lambda r: str(r.get("name"))):
+        name = str(row.get("name"))
+        state = meters.get(name)
+        dead = False
+        if str(row.get("status") or "").strip().lower() == IDLE_STATUS \
+                and not lane_is_done(name):
+            err = (state or {}).get("error")
+            if err and context_meter.is_dead_at_ceiling(err):
+                dead = True
+                tokens = (state or {}).get("tokens")
+                size = f"{tokens:,} tokens" if tokens is not None else "an unread size"
+                lines.append(f"DEAD AT ITS CEILING — {name} at {size}: close it "
+                             f"--abandoned and reopen its unit split smaller")
+            elif err:
+                lines.append(f"NEEDS THE DESK — {name} stopped on an API error at "
+                             f"{when_text(err.get('at'))}: \"{err.get('text')}\". "
+                             f"Send it [desk] answer: carry on")
+            else:
+                idle = idle_not_done_line(name, state)
+                if idle:
+                    lines.append(idle)
+        if state is None or state.get("percent") is None:
+            if not listed and not not_measured_yet(row, state):
+                lines.append(f"{UNREADABLE}{name}")
+            continue
+        if not dead and state["percent"] >= FILLING_PERCENT:
+            lines.append(f"FILLING — {name} at {state['percent']:g}%: send it "
+                         f"[desk] stop: and have it write what it has, in value order")
+    return lines
+
+
+def plan_text(record: dict | None) -> tuple[str, bool]:
+    """(`plan: <predicted> <gate> (window k of n)`, whether this window was
+    planned past 60%) for the desk on record; ("", False) for no desk."""
+    if not record or not record.get("desk"):
+        return "", False
+    plan = record.get("plan")
+    if not isinstance(plan, dict) or not plan.get("windows"):
+        return "plan: NO PLAN (the stamp refuses until `desk_record.py plan`)", False
+    k = int(plan.get("window") or 1)
+    w = next((x for x in plan["windows"] if x.get("k") == k), None)
+    if w is None:
+        return f"plan: none for window {k} (re-plan the job)", False
+    ends = plan.get("ends_after") or []
+    gate = f"after lane {ends[k - 1]}" if k <= len(ends) else "at save"
+    past = bool(w.get("past_60"))
+    return (f"plan: {w['predicted']:,} {gate}" + (", planned past 60%" if past else "")
+            + f" (window {k} of {len(plan['windows'])})"), past
+
+
+def fill_words(percent: float, planned_past_60: bool) -> str:
+    """The stamp's two lines on the desk's own line: a window not planned past
+    60% is past its line at 60%, every window at 70%."""
+    import desk_record
+    if percent >= desk_record.CEILING_PERCENT:
+        return (f"PAST {desk_record.CEILING_PERCENT}%: the stamp refuses every lane; "
+                f"hand over now")
+    if percent >= desk_record.LINE_PERCENT and not planned_past_60:
+        return (f"PAST {desk_record.LINE_PERCENT}%, NOT PLANNED: the stamp refuses "
+                f"from here; hand over now")
+    return ""
+
+
+def desk_meter_line(sessions: Sequence[dict] | None = None) -> str:
+    """`THIS DESK — <name> <tokens> tokens, <n>% of its window — plan: ...`,
+    for the window running this act when it is the desk on record, measured by
+    `scripts/context_meter.py`, never guessed; `THIS WINDOW — ...` with no plan
+    for any other window (a lane, the owner's). An unreadable meter says so,
+    and fails nothing."""
+    try:
+        import context_meter
+        session = context_meter.this_window(None if sessions is None else list(sessions))
+        state = None if session is None else context_meter.window_state(session)
+    except Exception:  # noqa: BLE001 -- an unreadable meter, never a failed act
+        state = None
+    if state is None or state.get("percent") is None:
+        return f"{UNREADABLE}this desk"
+    try:
+        import desk_record
+        record = desk_record.read_record()
+    except Exception:  # noqa: BLE001 -- a record that cannot be read is no desk's
+        record = None
+    figure = (f"{state['name']} {state['tokens']:,} tokens, "
+              f"{state['percent']:g}% of its window")
+    if not record or record.get("desk") != state.get("name"):
+        # A lane's window, or the owner's: its own figure, and no desk's plan.
+        return f"{WINDOW_LINE} — {figure}"
+    parts = [f"{DESK_LINE} — {figure}"]
+    planned, past = plan_text(record)
+    if planned:
+        parts.append(planned)
+    words = fill_words(state["percent"], past)
+    if words:
+        parts.append(words)
+    return " — ".join(parts)
+
+
+def stalled_lines(live_here: Sequence[dict] | None = None, *,
+                  meters: dict[str, dict | None] | None = None,
+                  listed: bool = False) -> list[str]:
+    """One loud line per window that needs the owner or the desk, then the
+    desk's own context line.
 
     A WINDOW AT A POP-UP LOOKS LIKE A WINDOW THINKING, and it cannot say so
     itself. In the first real desk run (2026-09-19) two lanes sat at a pop-up
     while the desk waited for their acks, and the owner told the desk. "The desk
     looks for stalls" was a sentence in its skill and did not happen -- so every
     act the desk performs anyway (`--list`, an open, a close, and every
-    `desk_record.py` act) ends by printing these lines. Best effort by design:
-    it never raises, because it rides on commands that must not fail for it.
+    `desk_record.py` act) ends by printing these lines. After the pop-ups: the
+    lanes stopped on an API error, idle mid-task, dead at their ceiling or
+    filling (:func:`meter_lines`), and last the desk's own figure
+    (:func:`desk_meter_line`; the owner, 2026-11-02: "it jsut means you are not
+    really tracking context accurately"). Best effort by design: it never
+    raises, because it rides on commands that must not fail for it.
     """
+    sessions = None
     try:
         if live_here is None:
-            live_here = here(live_sessions())
-        stalled = [row for row in live_here if str(row.get("status")) == STALLED_STATUS]
-        if not stalled:
-            return []
-        import note_prompt
-        last: dict[str, dict] = {}
-        for entry in note_prompt.read_log(note_prompt.LOG):
-            last[str(entry.get("session"))] = entry
-        lines = []
-        for row in sorted(stalled, key=lambda r: str(r.get("name"))):
-            entry = last.get(str(row.get("sessionId")))
-            what = (f"{entry.get('tool')}: {entry.get('what')}" if entry
-                    else "no pop-up on record -- it may be asking the owner a question")
-            lines.append(f"{NEEDS_OWNER} -- the `{row.get('name')}` tab is stopped "
-                         f"and waiting for the owner: {what}")
-        return lines + ["  Tell the owner which tab, in this turn."]
+            sessions = live_sessions()
+            live_here = here(sessions)
     except Exception:  # noqa: BLE001 -- a banner must never break the act it rides on
-        return []
+        return [f"{UNREADABLE}every window: the live list could not be read"]
+    lines: list[str] = []
+    try:
+        stalled = [row for row in live_here if str(row.get("status")) == STALLED_STATUS]
+        if stalled:
+            import note_prompt
+            last: dict[str, dict] = {}
+            for entry in note_prompt.read_log(note_prompt.LOG):
+                last[str(entry.get("session"))] = entry
+            for row in sorted(stalled, key=lambda r: str(r.get("name"))):
+                entry = last.get(str(row.get("sessionId")))
+                what = (f"{entry.get('tool')}: {entry.get('what')}" if entry
+                        else "no pop-up on record -- it may be asking the owner a question")
+                lines.append(f"{NEEDS_OWNER} -- the `{row.get('name')}` tab is stopped "
+                             f"and waiting for the owner: {what}")
+            lines.append("  Tell the owner which tab, in this turn.")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        if meters is None:
+            meters = window_meters(live_here)
+        lines += meter_lines(live_here, read_record(), meters, listed=listed)
+    except Exception:  # noqa: BLE001
+        lines.append(f"{UNREADABLE}every lane")
+    lines.append(desk_meter_line(sessions))
+    return lines
 
 
 # --- --close ----------------------------------------------------------------

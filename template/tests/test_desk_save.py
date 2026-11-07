@@ -29,6 +29,7 @@ def job(repo):  # noqa: F811
     """A desk with one lane that has edited its file, written a new one, and closed."""
     git(repo, "add", "-A")
     dr.open_desk(DESK, "a test job", inherit=False)
+    dr.plan_desk(DESK, 10)
     dr.stamp(DESK, "lane-alpha", sheet(repo))
     (repo / "records/2025/January/Ledger.md").write_text("x\nSession 3\n", encoding="utf-8")
     (repo / "records/2025/January/New Note.md").write_text("born\n", encoding="utf-8")
@@ -66,6 +67,7 @@ def test_a_stray_edit_refuses_the_save_and_leaves_the_desk_open(job, capsys):
 
 def test_a_lane_still_open_refuses_the_save(repo, capsys):  # noqa: F811
     dr.open_desk(DESK, "a test job", inherit=False)
+    dr.plan_desk(DESK, 10)
     dr.stamp(DESK, "lane-alpha", sheet(repo))
     assert ds.save(DESK, "the job", push=False) == 1
     assert "not yet closed" in capsys.readouterr().err

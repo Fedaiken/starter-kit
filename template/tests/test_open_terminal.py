@@ -12,6 +12,7 @@ over whatever `scripts/reason_tokens.json` holds.
 """
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 import os
 import shlex
 import shutil
@@ -644,6 +645,7 @@ def desk(room, tmp_path, monkeypatch):
     monkeypatch.setattr(dr, "resolve_program", lambda program, where: str(where / program))
     monkeypatch.setattr(dr, "run_done_command", lambda argv, cwd: (0, "ok\n"))
     dr.open_desk("the-desk", "a test job", inherit=False)
+    dr.plan_desk("the-desk", 10)
     dr.stamp("the-desk", "lane-alpha", "sheets/lane-alpha.md")
     return room
 
@@ -890,7 +892,10 @@ def test_the_banner_never_breaks_the_act_it_rides_on(room, monkeypatch):
     def boom():
         raise RuntimeError("the CLI is gone")
     monkeypatch.setattr(ot, "live_sessions", boom)
-    assert ot.stalled_lines() == []
+    # It does not raise, and an unreadable list says so rather than printing
+    # nothing: the desk's own figure is unreadable then, never made up.
+    assert ot.stalled_lines() == [f"{ot.UNREADABLE}every window: the live list "
+                                  f"could not be read"]
 
 
 def test_a_lane_window_carries_its_role_in_its_environment(room):
@@ -1238,3 +1243,133 @@ def test_this_process_finds_itself_in_the_real_process_table():
 @pytest.mark.skipif(os.name != "nt", reason="asks a real PowerShell for the process table")
 def test_this_process_finds_itself_in_the_real_windows_table():
     assert os.getpid() in ot.own_ancestry()
+
+
+# --- the desk's own figure, and the lanes that need the desk (context_meter) ---------
+
+
+def meter(monkeypatch, states, mine=None):
+    """Stand-in meter readings, by window name; `mine` names THIS window."""
+    import context_meter as cm
+    monkeypatch.setattr(cm, "window_state",
+                        lambda row, **kw: states.get(row.get("name")))
+    monkeypatch.setattr(cm, "this_window",
+                        lambda sessions=None: None if mine is None else {"name": mine})
+    return cm
+
+
+def state(name, tokens=None, error=None, sid=None):
+    return {"name": name, "session_id": sid or "s-" + name, "tokens": tokens,
+            "percent": None if tokens is None else round(tokens / 10_000, 1), "error": error}
+
+
+def test_every_banner_ends_with_the_desks_own_measured_line(desk, monkeypatch):
+    meter(monkeypatch, {"the-desk": state("the-desk", 267_771)}, mine="the-desk")
+    lines = ot.stalled_lines([])
+    assert lines[-1] == ("THIS DESK — the-desk 267,771 tokens, 26.8% of its window — "
+                         "plan: 189,540 at save (window 1 of 1)")
+
+
+def test_an_unreadable_desk_meter_says_so_and_never_a_number(room, monkeypatch):
+    meter(monkeypatch, {}, mine=None)
+    assert ot.stalled_lines([])[-1] == f"{ot.UNREADABLE}this desk"
+
+
+def test_a_desk_with_no_plan_is_told_on_its_own_line(room, monkeypatch):
+    monkeypatch.setattr(dr, "take_baseline", lambda repo=None: {})
+    dr.open_desk("the-desk", "unplanned", inherit=False)
+    meter(monkeypatch, {"the-desk": state("the-desk", 100_000)}, mine="the-desk")
+    assert "plan: NO PLAN" in ot.stalled_lines([])[-1]
+
+
+@pytest.mark.parametrize("percent, past, words", [
+    (59.0, False, ""), (60.0, False, "PAST 60%, NOT PLANNED"),
+    (65.0, True, ""), (70.0, True, "PAST 70%")])
+def test_the_desk_line_says_when_the_stamp_refuses_from_here(percent, past, words):
+    said = ot.fill_words(percent, past)
+    assert (words in said) if words else said == ""
+
+
+def test_open_close_and_list_all_end_with_the_desk_line(room, monkeypatch, capsys):
+    meter(monkeypatch, {"the-desk": state("the-desk", 300_000)}, mine="the-desk")
+    monkeypatch.setattr(dr, "take_baseline", lambda repo=None: {})
+    dr.open_desk("the-desk", "a job", inherit=False)
+    opened(room, status="idle")
+    ot.main(["--list"])
+    assert capsys.readouterr().out.rstrip().splitlines()[-1].startswith("THIS DESK")
+    ot.main(["--close", "--name", "lane-alpha"])
+    assert capsys.readouterr().out.rstrip().splitlines()[-1].startswith("THIS DESK")
+    ot.main(["--role", "lane", "--name", "lane-new", "--reason", OPUS_JOB,
+             "--task", "sheets/x.md"])
+    assert capsys.readouterr().out.rstrip().splitlines()[-1].startswith("THIS DESK")
+
+
+def test_a_window_that_is_not_the_desk_on_record_gets_its_own_figure_and_no_plan(desk, monkeypatch):
+    meter(monkeypatch, {"lane-alpha": state("lane-alpha", 650_000)}, mine="lane-alpha")
+    line = ot.stalled_lines([])[-1]
+    assert line == "THIS WINDOW — lane-alpha 650,000 tokens, 65% of its window"
+
+
+def test_the_list_shows_each_windows_measured_share(room, monkeypatch, capsys):
+    meter(monkeypatch, {"lane-alpha": state("lane-alpha", 412_000)})
+    opened(room, status="idle")
+    ot.main(["--list"])
+    assert " 41.2%" in capsys.readouterr().out
+
+
+def test_a_lane_stopped_on_an_api_error_needs_the_desk(room, monkeypatch):
+    err = {"error": "server_error", "text": "API Error: Server error", "at": "2026-11-02T20:00:00Z"}
+    meter(monkeypatch, {"lane-alpha": state("lane-alpha", 300_000, error=err)})
+    opened(room, status="idle")
+    lines = ot.stalled_lines()
+    assert any(line.startswith("NEEDS THE DESK — lane-alpha") for line in lines)
+
+
+def test_a_lane_dead_at_its_ceiling_is_named_with_its_size(room, monkeypatch):
+    err = {"error": "invalid_request", "text": "Prompt is too long", "at": "x"}
+    meter(monkeypatch, {"lane-alpha": state("lane-alpha", 970_937, error=err)})
+    opened(room, status="idle")
+    lines = ot.stalled_lines()
+    assert any("DEAD AT ITS CEILING — lane-alpha at 970,937 tokens" in line for line in lines)
+    assert not any(line.startswith("FILLING") for line in lines), "dead, not filling"
+
+
+def test_a_lane_past_80_percent_is_filling(room, monkeypatch):
+    meter(monkeypatch, {"lane-alpha": state("lane-alpha", 820_000)})
+    opened(room, status="busy")
+    assert any(line.startswith("FILLING — lane-alpha at 82%") for line in ot.stalled_lines())
+
+
+def test_a_lane_whose_meter_cannot_be_read_says_so(room, monkeypatch):
+    meter(monkeypatch, {"lane-alpha": state("lane-alpha")})
+    opened(room, status="idle")
+    assert f"{ot.UNREADABLE}lane-alpha" in ot.stalled_lines()
+
+
+def idle_lane(desk, monkeypatch, tmp_path, said, minutes_ago):
+    import context_meter as cm
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    entries = [{"type": "user", "message": {"content": "go on"}},
+               {"type": "assistant", "timestamp": at,
+                "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": said}],
+                            "usage": {"input_tokens": 5}}}]
+    (tmp_path / "s-lane-alpha.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    monkeypatch.setattr(cm, "PROJECT_DIR", tmp_path)
+    opened(desk, status="idle")
+    return ot.idle_not_done_line("lane-alpha", state("lane-alpha", 5))
+
+
+def test_a_lane_that_ended_its_turn_mid_task_is_idle_not_done(desk, monkeypatch, tmp_path):
+    line = idle_lane(desk, monkeypatch, tmp_path, "Next: the router.", 5)
+    assert line.startswith("IDLE, NOT DONE — lane-alpha idle since")
+    assert "[desk] answer:" in line, "one of the five messages a desk sends"
+
+
+def test_a_lane_that_asked_or_is_only_between_turns_is_not_flagged(desk, monkeypatch, tmp_path):
+    assert idle_lane(desk, monkeypatch, tmp_path, "question: which file?", 5) is None
+    assert idle_lane(desk, monkeypatch, tmp_path, "Next: the router.", 1) is None
+
+
+def test_a_window_this_desk_never_stamped_is_not_its_idle_lane(room, monkeypatch, tmp_path):
+    assert ot.idle_not_done_line("stray", state("stray", 5)) is None

@@ -63,6 +63,10 @@ A destination that is not written in this run is a nomination, not a destination
 
 Every cell filled. `Destination` is one of the values in the Step 1 table, exactly. `Written to` is a path or a row that exists in the tree right now, a kit commit, or `—` for `delete` only.
 
+### Step 3b — Route the backlog
+
+`backlog.md` holds what a closing desk logged for later, each entry parked until the blocker its bullet named (`scripts/desk_save.py` puts them there). Run `<venv python> scripts/backlog.py list`. For every entry: a blocker that has now happened makes it a desk job (`backlog.py desk <id>`) or, when already done, `close <id> --done "<commit or path:line>"`; work nothing outside a job blocks is a desk job, never parked; one still blocked stays parked, its `--until` naming the event that brings it back; one that is moot is `close <id> --dropped "<why nothing is lost>"`. Every entry is one short line plus a pointer to its full words (`backlog.py add … --pointer <path[:line]>`); the script refuses one over its cap. Run `<venv python> scripts/backlog.py check` and quote its verdict line: it exits 1 on an unrouted entry or a hand edit. Stage `backlog.md` with this run's paths.
+
 ### Step 4 — Gate, commit, stop
 
 1. Run `<venv python> scripts/kit_sync.py status` and quote its verdict line. Every `UNDECIDED` file takes `push`, `pull`, or `keep` now; re-run until it exits 0. A `pull` changes a file here — it is staged with this run's paths.

@@ -24,6 +24,8 @@ scripts/check_skill_commands.py
 scripts/extract_pdf.py
 scripts/githooks/pre-commit
 scripts/fetch_page.py
+scripts/context_meter.py
+scripts/lane_budget.py
 skills/desk/SKILL.md
 skills/lane/SKILL.md
 
@@ -50,6 +52,8 @@ tests/test_extract_pdf.py
 tests/conftest.py
 tests/test_fetch_page.py
 tests/test_check_docs_only.py
+tests/test_context_meter.py
+tests/test_lane_budget.py
 
 # The method
 kb/cardinal-rule-solve-through-structure.md

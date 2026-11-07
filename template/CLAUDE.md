@@ -56,6 +56,7 @@ When sources conflict, higher wins. Always.
 | `Archive/` | Backups and processed originals. Never a place to move a document *to*. |
 | `Working/` | Scratchpads for interrupted runs (gitignored). A matching file means resume first. |
 | `coordination/` | The desk's record, task sheets, and closed jobs. Written only by the desk scripts. |
+| `backlog.md` | What a desk logged for later, one capped line per entry, parked until its blocker; written by `desk_save.py` and `scripts/backlog.py`, routed every close-session. |
 | `.kit.json` · `scripts/kit_sync.py` | Which files came from the Starter Kit, and the check that keeps them and the kit in step. |
 
 ---

@@ -80,9 +80,11 @@ def two(homes):
     repo = homes
     at(ALPHA)
     dr.open_desk(DESK, "a year of statements", inherit=False)
+    dr.plan_desk(DESK, 10)
     dr.stamp(DESK, "lane-alpha", home_sheet(repo, ALPHA, "lane-alpha", SHEET))
     at(BETA)
     dr.open_desk(BETA_DESK, "the landlord letter", inherit=False)
+    dr.plan_desk(BETA_DESK, 10)
     dr.stamp(BETA_DESK, "draft-landlord", home_sheet(repo, BETA, "draft-landlord", BETA_SHEET))
     return repo
 
@@ -126,6 +128,7 @@ def test_a_bad_home_in_the_environment_refuses_every_act(homes, monkeypatch):
     monkeypatch.setattr(dr, "HOME_PROBLEM", "X_DESK_HOME='Bad' is not a desk home name")
     with pytest.raises(dr.DeskError, match="not a desk home name"):
         dr.open_desk(DESK, "a job", inherit=False)
+        dr.plan_desk(DESK, 10)
     with pytest.raises(dr.DeskError, match="not a desk home name"):
         dr.require_record()
 
@@ -147,6 +150,7 @@ def test_a_new_desk_with_no_home_is_refused_at_the_command_line(homes, capsys):
 def test_a_record_left_in_coordination_can_still_be_inherited(homes, monkeypatch):
     at(None)
     dr.open_desk("old-desk", "a job from before homes", inherit=False)
+    dr.plan_desk("old-desk", 10)
     monkeypatch.setattr(dr, "live_desk_problem", lambda record, actor: None)
     assert dr.main(["open-desk", "--desk", DESK, "--inherit"]) == 0
     assert dr.read_record()["desk"] == DESK
@@ -172,6 +176,7 @@ def test_two_desks_in_one_home_still_refuse_each_other(two):
     at(BETA)
     with pytest.raises(dr.DeskError, match="opens under a home name of its own"):
         dr.open_desk("a-second-desk", "another letter", inherit=False)
+        dr.plan_desk("a-second-desk", 10)
 
 
 def live_as(monkeypatch, *rows):
@@ -250,6 +255,7 @@ def test_a_stray_is_still_a_stray_to_both_desks(two):
 def test_the_launch_record_is_saved_by_whichever_desk_holds_it(homes):
     at(BETA)
     dr.open_desk(BETA_DESK, "the landlord letter", inherit=False)
+    dr.plan_desk(BETA_DESK, 10)
     (homes / "coordination/launch_record.jsonl").write_text("{}\n", encoding="utf-8")
     record = dr.require_record()
     by_owner, failures = co.findings(record, dr.changed_since_baseline(record))
