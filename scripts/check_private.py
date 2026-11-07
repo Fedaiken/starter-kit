@@ -39,6 +39,10 @@ def main() -> int:
         "GitHub account": prof.get("github_owner"),
         "home folder": str(Path.home()),
         "home folder (posix)": Path.home().as_posix(),
+        # The account name alone: a home path also appears escaped (C:\\Users\\<name>)
+        # and as Claude Code's project key (C--Users-<name>-...), which neither form
+        # above matches; the 2026-11-02 port published both.
+        "account name": Path.home().name,
     }
     patterns = {label: re.compile(rf"(?<![\w]){re.escape(v)}(?![\w])", re.I) for label, v in needles.items() if v}
     hits: list[str] = []
