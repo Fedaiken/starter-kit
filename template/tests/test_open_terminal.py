@@ -60,12 +60,10 @@ def room(tmp_path, monkeypatch):
                                     moved_by_other=False)
     monkeypatch.setattr(ot, "launch",
                         lambda command: state["launched"].append(command) or state["focus"])
-    # Tabs placement, with no real windows: the shared window's handles, the
-    # window in front, and what `tuck` was asked to minimize.
-    state["shared"], state["front"], state["tucked"] = [], wt.Front(101, "the game"), []
-    monkeypatch.setattr(ot, "WINDOW_MODE", tmp_path / "coordination" / "window_mode.json")
+    # Tabs placement, with no real windows: the shared window's handles, and
+    # what `tuck` was asked to minimize.
+    state["shared"], state["tucked"] = [], []
     monkeypatch.setattr(ot, "terminal_windows_titled", lambda names: list(state["shared"]))
-    monkeypatch.setattr(ot, "front_window", lambda: state["front"])
     # `tuck` minimizes every handle it is given; the pause after it is recorded,
     # not slept.
     monkeypatch.setattr(ot, "tuck",
@@ -350,7 +348,7 @@ def test_the_window_is_a_named_coloured_tab_with_the_model_written_out(room):
     assert window.argv == (
         "claude", "--model", "opus", "--permission-mode", "acceptEdits",
         "--name", "lane-alpha", "/lane lane-alpha sheet.md")
-    assert window.join is None, "a window joins only when placement says so"
+    assert window.join is None, "a window joins only when the open names the shared window"
     joined = ot.window_for("lane", "lane-alpha", "sheet.md", "opus", resume=False,
                            join=ot.SHARED_WINDOW)
     assert joined.join == ot.SHARED_WINDOW
@@ -428,8 +426,7 @@ def test_an_open_launches_and_writes_the_record(room):
 
 
 def test_an_open_records_that_the_front_stayed_put(room, capsys):
-    """The standing proof of the owner's 2026-11-07 ruling: every real open
-    records the window in front before and after."""
+    """Every real open records the window in front before and after."""
     assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
     (entry,) = record()
     assert entry["focus"] == {"before": "the game", "after": "the game",
@@ -437,11 +434,11 @@ def test_an_open_records_that_the_front_stayed_put(room, capsys):
     assert "FOCUS MOVED" not in capsys.readouterr().out
 
 
-def test_an_open_that_took_the_front_says_so_loud_and_records_it(room, capsys):
+def test_an_open_that_took_the_front_is_recorded_and_nothing_is_printed(room, capsys):
     room["focus"] = wt.FocusCheck("the game", "lane-alpha", moved_by_open=True,
-                                   moved_by_other=False)
+                                  moved_by_other=False)
     assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
-    assert "FOCUS MOVED: the game -> lane-alpha" in capsys.readouterr().out
+    assert "FOCUS MOVED" not in capsys.readouterr().out
     (entry,) = record()
     assert entry["focus"] == {"before": "the game", "after": "lane-alpha",
                               "moved_by_open": True, "moved_by_other": False}
@@ -473,17 +470,15 @@ def test_every_kind_of_open_carries_the_focus_check(room, capsys):
     assert [(e["name"], e["resumed"]) for e in entries] == [
         ("lane-alpha", False), ("desk-beta", False), ("lane-alpha", True), ("lane-alpha-2", False)]
     assert all(e["focus"]["moved_by_open"] is True for e in entries)
-    assert capsys.readouterr().out.count("FOCUS MOVED: a -> b") == 4
+    assert "FOCUS MOVED" not in capsys.readouterr().out
 
 
-# --- tabs in one window, without taking focus ---------------------------------
+# --- tabs in one window, always -----------------------------------------------
 #
-# The owner, 2026-11-07: "Can we have both of those things, like the minimized
-# and staying in the one window as tabs?" -- and, of the route below, "keep the
-# exception, that's fine". A tab joining the shared window took the front unless
-# the window was minimized; so it is minimized first, an open while the owner is
-# IN it gets a window of its own, and every tabs open is a trial whose failure
-# ends tabs for good.
+# The owner, 2026-11-08: "i prefer them in tabs to the many windows even if it
+# pulls my focus from another terminal", then "tabs always i guesss". Every
+# Windows Terminal open is a tab in the shared window, with no if-then; a tab
+# taking the front goes in the launch record and nothing acts on it.
 
 SHARED = 4400
 
@@ -520,64 +515,37 @@ def test_no_shared_window_yet_is_a_join_that_creates_it(room):
     assert entry["shared_found"] == [] and entry["tucked"] == []
 
 
-def test_the_shared_window_in_front_gets_no_join_and_no_trial(room, capsys):
-    """The owner typing in a tab there: a joining tab would become their
-    selected tab. A window of its own, nothing minimized, nothing judged."""
-    room["shared"], room["front"] = [SHARED], wt.Front(SHARED, "✳ advisor", True)
-    room["focus"] = wt.FocusCheck("✳ advisor", "lane-alpha", moved_by_open=True,
+def test_the_shared_window_in_front_is_joined_like_any_other_open(room, monkeypatch):
+    """The owner typing in a tab there: the new tab may take their selected
+    tab. `wt.tuck` leaves the window in front alone, so nothing is minimized."""
+    room["shared"] = [SHARED]
+    monkeypatch.setattr(ot, "tuck", lambda handles: [])
+    room["focus"] = wt.FocusCheck("advisor", "lane-alpha", moved_by_open=True,
                                   moved_by_other=False)
     assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
-    assert room["tucked"] == []
-    assert room["launched"][0][:3] == ["wt.exe", "-w", "new"]
-    (entry,) = record()
-    assert entry["placement"] == ot.OWN_WINDOW and "in front" in entry["placement_why"]
-    assert not ot.WINDOW_MODE.exists(), "an open that did not join was judged as a trial"
+    assert room["slept"] == []
+    assert room["launched"][0][:4] == ["wt.exe", "-w", pi.SHARED_WINDOW, "new-tab"]
+    assert record()[-1]["placement"] == ot.TABS
 
 
-def test_a_tabs_open_that_took_the_front_ends_tabs_for_good(room, capsys):
+def test_a_tab_that_took_the_front_changes_nothing_about_the_next_open(room, capsys):
+    """No verdict, and no word printed: the front moving is a record only."""
     room["shared"] = [SHARED]
     room["focus"] = wt.FocusCheck("the game", "lane-alpha", moved_by_open=True,
                                   moved_by_other=False)
     assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
-    out = capsys.readouterr().out
-    assert "FOCUS MOVED: the game -> lane-alpha" in out and "TABS OFF FOR GOOD" in out
-    verdict = json.loads(ot.WINDOW_MODE.read_text(encoding="utf-8"))
-    assert verdict["mode"] == ot.OWN_WINDOW and verdict["name"] == "lane-alpha"
-    assert verdict["why"] == "FOCUS MOVED: the game -> lane-alpha"
-    # The next open falls back, and minimizes nothing.
-    room["focus"] = wt.FocusCheck("the game", "the game", moved_by_open=False,
-                                  moved_by_other=False)
-    room["tucked"].clear()
     assert ot.main(["--role", "lane", "--name", "lane-beta", "--task",
                     "coordination/task_sheets/lane-beta.md", "--reason", OPUS_JOB]) == 0
-    assert room["launched"][1][:3] == ["wt.exe", "-w", "new"] and room["tucked"] == []
-    assert record()[-1]["placement"] == ot.OWN_WINDOW
-
-
-def test_a_held_trial_keeps_tabs_on(room):
-    room["shared"] = [SHARED]
-    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
-    assert ot.main(["--role", "lane", "--name", "lane-beta", "--task",
-                    "coordination/task_sheets/lane-beta.md", "--reason", OPUS_JOB]) == 0
-    assert not ot.WINDOW_MODE.exists()
+    assert [c[:4] for c in room["launched"]] == [
+        ["wt.exe", "-w", pi.SHARED_WINDOW, "new-tab"]] * 2
     assert [e["placement"] for e in record()] == [ot.TABS, ot.TABS]
-    assert room["tucked"] == [[SHARED], [SHARED]]
+    assert all(e["focus"]["moved_by_open"] for e in record())
+    assert "FOCUS MOVED" not in capsys.readouterr().out
 
 
-def test_the_owners_alt_tab_during_a_tabs_open_does_not_end_tabs(room):
-    room["shared"] = [SHARED]
-    room["focus"] = wt.FocusCheck("Task Switching", "✳ syxplay", moved_by_open=False,
-                                  moved_by_other=True)
-    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
-    assert not ot.WINDOW_MODE.exists()
-
-
-@pytest.mark.parametrize("text", ["not json", '{"mode": "tabs"}', "[]"])
-def test_a_verdict_file_that_cannot_be_read_is_refused(room, capsys, text):
-    ot.WINDOW_MODE.parent.mkdir(parents=True, exist_ok=True)
-    ot.WINDOW_MODE.write_text(text, encoding="utf-8")
-    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 2
-    assert room["launched"] == []
+def test_the_opener_keeps_no_verdict_on_tabs():
+    source = Path(ot.__file__).read_text(encoding="utf-8")
+    assert "window_mode" not in source and "--retry-tabs" not in source
 
 
 def test_the_shared_window_is_found_by_every_name_this_project_has_carried(room, monkeypatch):

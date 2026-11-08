@@ -105,6 +105,13 @@ them left out. Unscoped, the gate measures every lane's documents, and one
 lane's half-edited file failed three finished lanes (desk rules-check,
 2026-10-27). The whole-tree gate is `desk_save.py`'s, before the one save.
 
+A Starter Kit path in `owns:` is the exception, both ways: it is not demanded on
+`--only`, and one named there is refused. `check_docs.py` measures this
+project's documents only and exits 2 on any other path (its `clean_only`), so a
+stamp that demanded the kit path made every sheet owning one unfinishable
+(Savecraft, lane tabs-always, 2026-11-08). The kit's files are measured by the
+tests the sheet's `done:` runs, never by this gate.
+
 SINGLE WRITER
 -------------
 The desk writes this record and nothing else does; a lane's writes are its
@@ -304,7 +311,10 @@ def doc_gate_problem(command: str, owns: Sequence[str]) -> str | None:
     """Why this `done:` command runs the document gate on more, or less, than
     the sheet's `owns:` paths; None when it is not the gate or is scoped to
     exactly them -- every `--only` path inside `owns:`, every `owns:` path
-    reached by one."""
+    reached by one. A Starter Kit path in `owns:` is neither demanded nor
+    allowed on `--only`: the gate measures this project's documents only
+    (`scripts/check_docs.py` `clean_only`), so its `--only` is the sheet's
+    paths inside the project."""
     words, why = command_words(command)
     if why:
         return None
@@ -312,7 +322,14 @@ def doc_gate_problem(command: str, owns: Sequence[str]) -> str | None:
                  if word.replace("\\", "/").rsplit("/", 1)[-1] == DOC_GATE), None)
     if gate is None:
         return None
-    scoped = f"{words[0]} {words[gate]} {ONLY_FLAG} {' '.join(owns)}"
+    mine = [owned for owned in owns if kit_rel(owned) is None]
+    if mine:
+        scoped = f"{words[0]} {words[gate]} {ONLY_FLAG} {' '.join(mine)}"
+        scope, write = f"Scope it to the sheet's `owns:`: `{scoped}`", f"Write `{scoped}`"
+    else:
+        scope = write = ("The sheet owns no path inside this project for the gate to "
+                         "measure (a Starter Kit path is not one); take the line out "
+                         "of `done:`")
     named: list[str] | None = None
     rest = words[gate + 1:]
     for n, word in enumerate(rest):
@@ -326,23 +343,28 @@ def doc_gate_problem(command: str, owns: Sequence[str]) -> str | None:
                 named.append(value)
     if not named:
         return (f"it runs the document gate on the whole tree, so another lane's "
-                f"unfinished document fails this lane's report-done. Scope it to "
-                f"the sheet's `owns:`: `{scoped}` -- the whole-tree gate runs at "
-                f"the desk's save")
+                f"unfinished document fails this lane's report-done. {scope} -- "
+                f"the whole-tree gate runs at the desk's save")
     try:
         paths = [clean_path(p) for p in named]
     except DeskError as exc:
         return f"its `{ONLY_FLAG}` {exc}"
+    in_kit = [p for p in paths if kit_rel(p) is not None]
+    if in_kit:
+        return (f"its `{ONLY_FLAG}` names {', '.join(in_kit)}, a Starter Kit path, and "
+                f"`scripts/check_docs.py` measures this project's documents only: it "
+                f"exits 2 on any path outside the project, so report-done would fail. "
+                f"{write}")
     outside = [p for p in paths if not any(covers(owned, p) for owned in owns)]
     if outside:
         return (f"its `{ONLY_FLAG}` names {', '.join(outside)}, which the sheet's "
                 f"`owns:` does not list; a lane's gate measures its own files. "
-                f"Write `{scoped}`")
-    left_out = [owned for owned in owns if not any(covers(p, owned) for p in paths)]
+                f"{write}")
+    left_out = [owned for owned in mine if not any(covers(p, owned) for p in paths)]
     if left_out:
         return (f"its `{ONLY_FLAG}` leaves out {', '.join(left_out)}, which the "
                 f"sheet owns, so a document there is never measured before the "
-                f"save. Write `{scoped}`")
+                f"save. {write}")
     return None
 
 #: What names a COMMAND in a `done:` block: a script or interpreter, pytest, or
@@ -512,6 +534,89 @@ def command_words(command: str) -> tuple[list[str] | None, str | None]:
         return None, (f"its first word `{words[0]}` is not a program: open the line "
                       f"with the interpreter or git, or put prose outside the backticks")
     return words, None
+
+
+#: The raw-read scan a lane owning code it reads runs in its `done:` (Savecraft's
+#: backlog B61, 2026-11-08). A project that has `tests/test_raw_reads.py` has a test
+#: that reads every module under its `CODE_DIRS` for a raw export read and a
+#: deleted name -- not the lane's alone -- and two raw reads reached Savecraft's
+#: tree on 2026-11-07 from lanes that owned `scripts/` or `model/queries/` and
+#: ran only their own tests, caught only by the desk. `RAW_READ_DIRS` is that
+#: tuple. The rule holds only in a project that has the test file
+#: (`raw_reads_test_problem`): the template has none, so it stamps as before.
+RAW_READS_TEST = "tests/test_raw_reads.py"
+RAW_READ_DIRS = ("scripts", "Mods/colony-export", "model/queries")
+
+
+def pytest_runs(done: str) -> tuple[set[str], str | None]:
+    """(every word of every pytest command in `done:`, forward slashes, `./`
+    dropped and case-folded, the first such command). What a rule that demands a
+    test file whole reads: a file named in prose, or after `::`, is not in the
+    set."""
+    ran: set[str] = set()
+    first: str | None = None
+    for command in done_commands(done):
+        words, why = command_words(command)
+        if why or not any(_PYTEST.search(word) for word in words):
+            continue
+        first = first or command
+        ran.update(word.replace("\\", "/").removeprefix("./").casefold() for word in words)
+    return ran, first
+
+
+def folder_holds_scanned_code(path: str, repo: Path) -> bool:
+    """Whether `path`, which is not a `.py`, is a folder holding code the scan
+    reads -- whoever owns a folder owns every module in it. A file is not (a
+    name with a dot that is no folder on disk, or any file on disk:
+    `scripts/notes.md`, `scripts/Makefile`). A folder on disk holds it when a
+    `.py` sits in the part the scan reads, so a mod's compiled output
+    (`Mods/colony-export/build`) is not code; a folder not made yet does, for the
+    lane owning it is about to fill it."""
+    where = repo / path
+    if where.is_file() or ("." in path.rsplit("/", 1)[-1] and not where.is_dir()):
+        return False
+    for folder in RAW_READ_DIRS:
+        if not overlap(folder, path):
+            continue
+        if not where.is_dir():
+            return True
+        if any((repo / (folder if covers(path, folder) else path)).rglob("*.py")):
+            return True
+    return False
+
+
+def raw_read_code(owns: Sequence[str], repo: Path) -> list[str]:
+    """The `owns:` paths whose code the raw-read scan reads: a `.py` under one of
+    `RAW_READ_DIRS`, or a folder holding such code (`folder_holds_scanned_code`)."""
+    return [path for path in owns
+            if (any(covers(folder, path) for folder in RAW_READ_DIRS)
+                if path.casefold().endswith(".py")
+                else folder_holds_scanned_code(path, repo))]
+
+
+def raw_reads_test_problem(done: str, owns: Sequence[str], repo: Path) -> str | None:
+    """Why a sheet whose `owns:` names code the raw-read scan reads is refused for
+    its `done:`: no pytest command of it names `RAW_READS_TEST` as a whole file
+    (`::one_case` runs one case, not the scan). None when the sheet owns no such
+    code, runs the scan, or `repo` has no such test file."""
+    if not (repo / RAW_READS_TEST).is_file():
+        return None
+    code = raw_read_code(owns, repo)
+    if not code:
+        return None
+    ran, first = pytest_runs(done)
+    if RAW_READS_TEST.casefold() in ran:
+        return None
+    if first:
+        fix = f"{first.rstrip()} {RAW_READS_TEST}"
+    else:
+        fix = f"{identity.venv_python_rel()} -m pytest {RAW_READS_TEST} -q"
+    return (f"`owns:` names code the raw-read scan reads ({', '.join(code)}) and `done:` "
+            f"does not run `{RAW_READS_TEST}`. A lane that owns a `.py` under "
+            f"{', '.join(f'`{folder}/`' for folder in RAW_READ_DIRS)} runs it whole (backlog "
+            f"B61): it reads every module there for a raw export read and a deleted name, "
+            f"and a `done:` that ran only the lane's own tests let two raw reads reach the "
+            f"tree on 2026-11-07, caught only by the desk. Write `{fix}`")
 
 
 def command_problem(command: str) -> str | None:
@@ -1107,6 +1212,9 @@ def sheet_problems(text: str, repo: Path | None = None) -> list[str]:
             f"minutes per lane and reports every other lane's breakage as this "
             f"lane's"
         )
+    why = raw_reads_test_problem(fields["done"], owns, repo)
+    if why:
+        problems.append(why)
     # The lane budget: a unit too big for one window is split here, before it
     # opens -- never after it compacts (`scripts/lane_budget.py`).
     from lane_budget import budget_problem

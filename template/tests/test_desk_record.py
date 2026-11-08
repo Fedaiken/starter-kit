@@ -191,6 +191,153 @@ def test_only_the_whole_suite_line_is_named(repo):
     assert f"`{VENV} -m pytest -q`" in said
 
 
+# --- a sheet that owns code the raw-read scan reads runs that scan (B61) ------
+# Savecraft's backlog B61, session 2026-11-07: "lanes owning scripts/ or
+# model/queries/ skip tests/test_raw_reads.py; two raw reads reached the tree on
+# 2026-11-07, caught only by the desk". The owner, 2026-11-08: "do it now". The
+# rule holds only in a project that has the test file: a freshly seeded one has
+# none, so the template stamps as before.
+
+RAW = "tests/test_raw_reads.py"
+#: A `done:` for a sheet owning a project `.py`: the lane's own test and the
+#: encoding pair, which a project that carries that rule needs as well.
+OWN_TESTS = (f"{VENV} -m pytest tests/test_lane_code.py tests/test_subprocess_encoding.py "
+             f"tests/test_console_encoding.py -q")
+#: What the scan reads, as a sheet may own it: a `.py`, a folder in or above a scanned
+#: folder, spelled with and without a trailing slash or its case. None is on disk in
+#: `raw_repo`: a folder not made yet counts, for its owner is about to fill it.
+RAW_OWNED = ["scripts/verify_figures.py", "SCRIPTS/verify_figures.PY", "Mods/colony-export/verify.py",
+             "model/queries/rooms.py", "scripts/tools/ruler.py", "scripts", "scripts/tools",
+             "model/queries/", "Mods/colony-export", "model"]
+
+
+def raw_sheet(*owns, done=OWN_TESTS):
+    lines = "".join(f"- {path}\n" for path in owns)
+    return (SHEET.split("owns:")[0] + f"owns:\n{lines}reads:\n- sources/statement_3.md\n"
+            f"task:\nEdit the code.\ndone:\n{done}\n")
+
+
+def raw_problems(text, repo):
+    return [p for p in dr.sheet_problems(text, repo) if "raw-read scan" in p]
+
+
+@pytest.fixture
+def raw_repo(repo):
+    """The stand-in workspace with the raw-read scan on file, as Savecraft has it."""
+    (repo / RAW).parent.mkdir(exist_ok=True)
+    (repo / RAW).write_text("def test_scan():\n    pass\n", encoding="utf-8")
+    return repo
+
+
+@pytest.mark.parametrize("owned", RAW_OWNED)
+def test_a_sheet_owning_scanned_code_without_the_raw_reads_test_is_refused_at_the_stamp(
+        raw_repo, owned):
+    text = raw_sheet(owned)
+    said = raw_problems(text, raw_repo)
+    assert len(said) == 1
+    assert f"`owns:` names code the raw-read scan reads ({dr.clean_path(owned)})" in said[0]
+    assert f"`done:` does not run `{RAW}`" in said[0]
+    assert "backlog B61" in said[0]
+    dr.open_desk(DESK, "a test job", inherit=False)
+    dr.plan_desk(DESK, 10)
+    with pytest.raises(dr.DeskError, match="raw-read scan"):
+        dr.stamp(DESK, "lane-alpha", sheet(raw_repo, text=text))
+    assert "lane-alpha" not in dr.read_record()["lanes"]
+
+
+@pytest.mark.parametrize("done", [
+    OWN_TESTS,
+    # One case is not the scan.
+    f"{OWN_TESTS} {RAW}::test_scan",
+    # Named only in prose, which report-done never runs.
+    f"{OWN_TESTS}\n(and later {RAW})",
+    # A pytest run that is not the lane's own, and a script run.
+    f"{VENV} scripts/verify_figures.py report.md\n{VENV} -m pytest tests/test_subprocess_encoding.py "
+    f"tests/test_console_encoding.py -q",
+])
+def test_only_the_whole_raw_reads_file_in_a_pytest_command_meets_the_rule(raw_repo, done):
+    assert len(raw_problems(raw_sheet("scripts/verify_figures.py", done=done), raw_repo)) == 1
+
+
+def test_the_raw_reads_refusal_writes_the_line_that_would_pass(raw_repo):
+    said = raw_problems(raw_sheet("scripts/verify_figures.py"), raw_repo)[0]
+    fixed = f"{OWN_TESTS} {RAW}"
+    assert f"Write `{fixed}`" in said
+    assert dr.sheet_problems(raw_sheet("scripts/verify_figures.py", done=fixed), raw_repo) == []
+    said = raw_problems(raw_sheet("scripts/verify_figures.py",
+                                  done=f"{VENV} scripts/verify_figures.py report.md"), raw_repo)[0]
+    assert f"Write `{VENV} -m pytest {RAW} -q`" in said
+
+
+@pytest.mark.parametrize("done", [
+    f"{OWN_TESTS} {RAW}",
+    f"`{OWN_TESTS} ./{RAW}` exits 0",
+    # Across two commands, each a pytest run.
+    f"{OWN_TESTS}\n{VENV} -m pytest {RAW} -q",
+])
+def test_a_sheet_owning_scanned_code_with_the_raw_reads_test_is_stamped(raw_repo, done):
+    text = raw_sheet("scripts/verify_figures.py", "model/queries", done=done)
+    assert dr.sheet_problems(text, raw_repo) == []
+    dr.open_desk(DESK, "a test job", inherit=False)
+    dr.plan_desk(DESK, 10)
+    dr.stamp(DESK, "lane-alpha", sheet(raw_repo, text=text))
+    owns = dr.read_record()["lanes"]["lane-alpha"]["owns"]
+    assert owns == ["scripts/verify_figures.py", "model/queries"]
+
+
+@pytest.fixture
+def code_repo(raw_repo):
+    """`raw_repo` with the folders on disk: scanned code in each of the three, and in
+    them a folder of the mod's compiled output, a data folder and an extensionless file."""
+    for rel in ("scripts/tools/ruler.py", "model/queries/rooms.py", "Mods/colony-export/verify.py",
+                "Mods/colony-export/build/classes/Thing.class", "scripts/data/table.yaml",
+                "scripts/Makefile", "model/mapping/rooms.yaml"):
+        path = raw_repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+    return raw_repo
+
+
+@pytest.mark.parametrize("owned", ["scripts", "scripts/tools", "model/queries/", "Mods/colony-export",
+                                   "model"])
+def test_a_folder_on_disk_holding_scanned_code_is_refused_without_the_raw_reads_test(code_repo, owned):
+    said = raw_problems(raw_sheet(owned), code_repo)
+    assert len(said) == 1 and f"({dr.clean_path(owned)})" in said[0]
+
+
+@pytest.mark.parametrize("owned", ["Mods/colony-export/build", "scripts/data", "scripts/Makefile",
+                                   "model/mapping"])
+def test_a_folder_on_disk_holding_no_scanned_code_is_untouched_by_the_raw_reads_rule(code_repo, owned):
+    """The mod's compiled output sits under a scanned folder and holds no `.py`: it owes no scan."""
+    assert raw_problems(raw_sheet(owned), code_repo) == []
+
+
+@pytest.mark.parametrize("owned", [
+    "records/2025/January",
+    "scripts/notes.md", "scripts/queue.yaml", "model/queries/README.md",
+    # A `.py` outside the scanned folders, and names that only begin like one.
+    "model/mapping/rooms.py", "tests/test_lane_code.py", "Mods/other-mod/build.py",
+    "scriptsmith/tool.py", "scripts_old", "model/queries_old",
+])
+def test_a_sheet_owning_no_scanned_code_is_untouched_by_the_raw_reads_rule(raw_repo, owned):
+    assert raw_problems(raw_sheet(owned), raw_repo) == []
+
+
+def test_a_kit_python_file_is_not_scanned_code(raw_repo, kit):
+    """The scan reads this project's folders; a kit path is a folder of the kit's."""
+    assert dr.sheet_problems(kit_sheet(kit), raw_repo) == []
+
+
+@pytest.mark.parametrize("owned", RAW_OWNED)
+def test_a_project_without_the_raw_reads_test_stamps_as_before(repo, owned):
+    assert not (repo / RAW).exists()
+    assert dr.sheet_problems(raw_sheet(owned), repo) == []
+    dr.open_desk(DESK, "a test job", inherit=False)
+    dr.plan_desk(DESK, 10)
+    dr.stamp(DESK, "lane-alpha", sheet(repo, text=raw_sheet(owned)))
+    assert dr.clean_path(owned) in dr.read_record()["lanes"]["lane-alpha"]["owns"]
+
+
 #: SHEET's `owns:` as the stamp records them, and the gate line scoped to them.
 OWNS = "records/2025/January records/2025/February"
 GATE = f"{VENV} scripts/check_docs.py"
@@ -1304,6 +1451,78 @@ def test_a_kit_sheet_passes_the_stamp_and_its_lane_owns_the_kit_file(repo, kit):
     assert dr.read_record()["lanes"]["kit-lane"]["owns"] == [owned]
     assert owned in said[0]
     assert dr.owners_of(dr.read_record(), owned) == ["kit-lane"]
+
+
+#: Savecraft, lane tabs-always, 2026-11-08: `check_docs.py --only` exits 2 on a
+#: Starter Kit path ("not a path inside this project"), yet the stamp required
+#: `--only` to name every owns: path, so any sheet owning a kit path hit it. The
+#: gate measures this project's documents only (`scripts/check_docs.py`,
+#: `clean_only`), so a kit path is neither demanded on `--only` nor allowed.
+KIT_FILE = "template/scripts/desk_record.py"
+
+
+def kit_gate_sheet(kit, done_gate, owns=("kb/some-digest.md",)):
+    """A sheet owning project paths AND a kit `.py`, whose `done:` runs the gate
+    as `done_gate`."""
+    own_lines = "".join(f"- {path}\n" for path in owns) + f"- {kit.as_posix()}/{KIT_FILE}\n"
+    return (f"# Task sheet: kit-gate-lane\n"
+            f"unit: the desk record's two copies\n"
+            f"reason: design-latitude\n"
+            f"owns:\n{own_lines}"
+            f"reads:\n- sources/statement_3.md\n"
+            f"task:\nEdit both.\n"
+            f"done:\n{done_gate}\n")
+
+
+def test_a_sheet_owning_a_project_doc_and_a_kit_path_is_stamped_with_only_the_project_path(
+        repo, kit):
+    text = kit_gate_sheet(kit, f"{GATE} --only kb/some-digest.md")
+    assert dr.sheet_problems(text, repo) == []
+    opened_desk(repo)
+    dr.plan_desk(DESK, 4)
+    dr.stamp(DESK, "kit-gate-lane", sheet(repo, "kit-gate-lane", text))
+    owns = dr.read_record()["lanes"]["kit-gate-lane"]["owns"]
+    assert owns == ["kb/some-digest.md", f"{kit.as_posix()}/{KIT_FILE}"]
+
+
+def test_a_sheet_owning_a_kit_path_still_has_every_project_path_demanded_on_only(repo, kit):
+    text = kit_gate_sheet(kit, f"{GATE} --only kb/some-digest.md",
+                          owns=("kb/some-digest.md", "records/2025/January"))
+    said = problems(text, repo)
+    assert "leaves out records/2025/January, which the sheet owns" in said
+    # The line it asks for names the project paths and not the kit's.
+    assert f"Write `{GATE} --only kb/some-digest.md records/2025/January`" in said
+    assert kit.as_posix() not in said.split("Write `")[1].split("`")[0]
+    fixed = kit_gate_sheet(kit, f"{GATE} --only kb/some-digest.md records/2025/January",
+                           owns=("kb/some-digest.md", "records/2025/January"))
+    assert dr.sheet_problems(fixed, repo) == []
+
+
+def test_an_unscoped_gate_on_a_sheet_owning_a_kit_path_is_asked_for_the_project_paths(repo, kit):
+    said = problems(kit_gate_sheet(kit, GATE), repo)
+    assert "runs the document gate on the whole tree" in said
+    assert f"`{GATE} --only kb/some-digest.md`" in said
+
+
+@pytest.mark.parametrize("spelled", ["absolute", "from the project root"])
+def test_a_kit_path_on_only_is_refused_because_the_gate_exits_2_on_it(repo, kit, spelled):
+    named = (f"{kit.as_posix()}/{KIT_FILE}" if spelled == "absolute"
+             else f"../{kit.name}/{KIT_FILE}")
+    said = problems(kit_gate_sheet(kit, f"{GATE} --only kb/some-digest.md {named}"), repo)
+    assert f"names {kit.as_posix()}/{KIT_FILE}, a Starter Kit path" in said
+    assert "exits 2 on any path outside the project" in said
+    assert f"Write `{GATE} --only kb/some-digest.md`" in said
+
+
+def test_a_sheet_owning_only_kit_paths_has_no_gate_line_to_write(repo, kit):
+    """Nothing in this project for the gate to measure: the remedy is to drop the
+    line, never `--only` with no path after it."""
+    top = kit.as_posix()
+    for done_gate in (GATE, f"{GATE} --only {top}/{KIT_FILE}"):
+        said = problems(kit_gate_sheet(kit, done_gate, owns=()), repo)
+        assert "owns no path inside this project" in said
+        assert "take the line out of `done:`" in said
+        assert "--only `" not in said and "--only  " not in said
 
 
 @pytest.mark.parametrize("where", ["elsewhere", "kit root", "kit git", "no kit"])
