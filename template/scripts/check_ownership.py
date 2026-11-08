@@ -23,6 +23,11 @@ under its own heading, never a failure, never staged. A file another window
 changed WHILE the desk was open is recorded with `desk_record.py outside
 <path> --why ...` and is listed the same way.
 
+The Starter Kit's repo is read the same way (`desk_record.py`, THE STARTER
+KIT): every file changed there since the desk opened is named by its kit path
+and needs exactly one owner too, so a stray edit in the kit fails this check
+as one here does.
+
 On a pass it prints the changed files grouped by owner, which is also the list
 the desk's one save stages by path.
 

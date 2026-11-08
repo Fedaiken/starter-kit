@@ -1218,3 +1218,154 @@ def test_show_names_the_plan_or_its_absence(repo):
     assert any(dr.NO_PLAN in line for line in dr.show(None))
     dr.plan_desk(DESK, 4)
     assert any("window 1 of 1 of this job's plan: 4 lane(s)" in line for line in dr.show(None))
+
+
+def test_a_restamp_keeps_what_own_gave_the_lane_and_says_so(desk):
+    """Savecraft, 2026-11-07: a restamp reset a working lane's `owns` to its
+    sheet's list and silently dropped four files `own` had given it."""
+    dr.own(DESK, "lane-alpha", ["records/2024/Q1/Summary.md", "records/2025/January/x.md"],
+           give=True)
+    said = dr.stamp(DESK, "lane-alpha", sheet(desk))
+    owns = dr.read_record()["lanes"]["lane-alpha"]["owns"]
+    assert "records/2024/Q1/Summary.md" in owns
+    assert "records/2025/January" in owns and "records/2025/January/x.md" not in owns
+    assert any("kept, given by `own`" in line and "Summary.md" in line for line in said)
+    dr.own(DESK, "lane-alpha", ["records/2024/Q1/Summary.md"], give=False)
+    dr.stamp(DESK, "lane-alpha", sheet(desk))
+    assert "records/2024/Q1/Summary.md" not in dr.read_record()["lanes"]["lane-alpha"]["owns"]
+
+
+# --- the Starter Kit: the one root outside the project ------------------------
+# Savecraft, 2026-11-07, the owner: "can we just cut the back and forth?" -- a
+# kit fix is given to a lane like any other. The kit is a throwaway repo the
+# setting names.
+
+
+@pytest.fixture
+def kit(tmp_path_factory, monkeypatch):
+    """A Starter Kit repo in a folder of its own, named by `STARTER_KIT_DIR`."""
+    root = tmp_path_factory.mktemp("Starter_Kit").resolve()
+    git(root, "init", "-q")
+    git(root, "config", "user.email", "t@example.com")
+    git(root, "config", "user.name", "t")
+    for rel in ("README.md", "template/scripts/desk_record.py",
+                "template/tests/test_desk_record.py"):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "start")
+    monkeypatch.setattr(dr, "STARTER_KIT_DIR", str(root))
+    return root
+
+
+def kit_sheet(kit, owns="template/scripts/desk_record.py"):
+    top = kit.as_posix()
+    return f"""# Task sheet: kit-lane
+unit: the kit's copy of the desk record
+reason: design-latitude
+owns:
+- {top}/{owns}
+reads:
+- {top}/README.md
+- sources/statement_3.md
+task:
+Port the change into the kit's copy.
+done:
+python -m pytest {top}/template/tests/test_desk_record.py -q
+"""
+
+
+def test_the_kit_itself_names_no_kit_root():
+    """Inside the kit, `../Starter_Kit` from the template names no folder: the
+    template is no user of the setting, and nothing outside it is accepted."""
+    real = Path(dr.__file__).resolve().parents[1]
+    if real.parent.name == "Starter_Kit" and real.name == "template":
+        assert dr.kit_root() is None
+
+
+def test_a_kit_path_is_written_in_one_form_however_the_sheet_spells_it(repo, kit):
+    one = f"{kit.as_posix()}/template/scripts/desk_record.py"
+    assert dr.clean_path(one) == one
+    assert dr.clean_path(str(kit / "template" / "scripts" / "desk_record.py")) == one
+    assert dr.clean_path(one.upper().replace("TEMPLATE/SCRIPTS/DESK_RECORD.PY",
+                                             "template/scripts/desk_record.py")) == one
+    assert dr.clean_path(f"../{kit.name}/template/scripts/desk_record.py/") == one
+    assert dr.kit_rel(one) == "template/scripts/desk_record.py"
+    assert dr.kit_rel("records/2025/January") is None
+
+
+def test_a_kit_sheet_passes_the_stamp_and_its_lane_owns_the_kit_file(repo, kit):
+    assert dr.sheet_problems(kit_sheet(kit), repo) == []
+    opened_desk(repo)
+    dr.plan_desk(DESK, 4)
+    said = dr.stamp(DESK, "kit-lane", sheet(repo, "kit-lane", kit_sheet(kit)))
+    owned = f"{kit.as_posix()}/template/scripts/desk_record.py"
+    assert dr.read_record()["lanes"]["kit-lane"]["owns"] == [owned]
+    assert owned in said[0]
+    assert dr.owners_of(dr.read_record(), owned) == ["kit-lane"]
+
+
+@pytest.mark.parametrize("where", ["elsewhere", "kit root", "kit git", "no kit"])
+def test_a_path_outside_the_project_and_the_kit_is_still_refused(repo, kit, tmp_path_factory,
+                                                                monkeypatch, where):
+    if where == "elsewhere":
+        raw = (tmp_path_factory.mktemp("Other_Project") / "notes.md").as_posix()
+    elif where == "kit root":
+        raw = kit.as_posix()
+    elif where == "kit git":
+        raw = f"{kit.as_posix()}/.git/config"
+    else:
+        raw = f"{kit.as_posix()}/README.md"
+        monkeypatch.setattr(dr, "STARTER_KIT_DIR", str(kit) + "-gone")
+    with pytest.raises(dr.DeskError):
+        dr.clean_path(raw)
+    text = kit_sheet(kit).replace(f"- {kit.as_posix()}/template/scripts/desk_record.py",
+                                  f"- {raw}")
+    assert any(p.startswith("owns:") for p in dr.sheet_problems(text, repo))
+
+
+def test_two_lanes_cannot_own_one_kit_file(repo, kit):
+    opened_desk(repo)
+    dr.plan_desk(DESK, 4)
+    dr.stamp(DESK, "kit-lane", sheet(repo, "kit-lane", kit_sheet(kit)))
+    with pytest.raises(dr.DeskError, match="two lanes cannot own one file"):
+        dr.stamp(DESK, "kit-lane-b", sheet(repo, "kit-lane-b", kit_sheet(kit)))
+    dr.stamp(DESK, "lane-alpha", sheet(repo))
+    with pytest.raises(dr.DeskError, match="two lanes cannot own one file"):
+        dr.own(DESK, "lane-alpha", [f"{kit.as_posix()}/template"], give=True)
+
+
+def test_another_live_desks_kit_file_is_refused_too(repo, kit, monkeypatch):
+    for attr in ("HOME", "RECORD", "DONE_DIR", "DESK_LOG", "CLOSED_DIR", "DESK_OWNS",
+                 "HOME_PROBLEM"):
+        monkeypatch.setattr(dr, attr, getattr(dr, attr))
+    dr.use_home(None)
+    opened_desk(repo)
+    dr.plan_desk(DESK, 4)
+    dr.stamp(DESK, "kit-lane", sheet(repo, "kit-lane", kit_sheet(kit)))
+    dr.use_home("second")
+    dr.open_desk("desk-two", "another job", inherit=False)
+    dr.plan_desk("desk-two", 4)
+    with pytest.raises(dr.DeskError, match="kit-lane"):
+        dr.stamp("desk-two", "kit-lane-b", sheet(repo, "kit-lane-b", kit_sheet(kit)))
+
+
+def test_the_ownership_check_catches_a_stray_kit_edit_and_passes_an_owned_one(repo, kit):
+    (kit / "template" / "tests" / "test_desk_record.py").write_text("before\n", encoding="utf-8")
+    opened_desk(repo)                   # that edit is in the baseline: nobody's lane
+    dr.plan_desk(DESK, 4)
+    dr.stamp(DESK, "kit-lane", sheet(repo, "kit-lane", kit_sheet(kit)))
+    top = kit.as_posix()
+    (kit / "template" / "scripts" / "desk_record.py").write_text("ported\n", encoding="utf-8")
+    record = dr.read_record()
+    by_owner, failures = co.findings(record, dr.changed_since_baseline(record))
+    assert failures == []
+    assert by_owner["kit-lane"] == [f"{top}/template/scripts/desk_record.py"]
+    assert set(by_owner) == {"kit-lane", dr.DESK_LANE}
+    (kit / "README.md").write_text("stray\n", encoding="utf-8")
+    (kit / "template" / "new.py").write_text("new\n", encoding="utf-8")
+    by_owner, failures = co.findings(record, dr.changed_since_baseline(record))
+    assert failures == [f"{top}/README.md: NO lane owns this file",
+                        f"{top}/template/new.py: NO lane owns this file"]
+    assert co.main([]) == 1

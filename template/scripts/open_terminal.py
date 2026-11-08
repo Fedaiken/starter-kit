@@ -22,9 +22,11 @@ HAZELHURST, and from there into the Starter Kit. FACOWORK's owner ruled that
 batched work runs as one DESK window directing LANE windows the owner can see
 and click into, never invisible subagents (FACOWORK R1, R2;
 `kb/desk-and-lane-philosophy.md`). This is the program a desk runs to open a
-lane: a named tab in this project's shared Windows Terminal window, coloured so
-the room can be read at a glance, already running its first instruction so
-nobody types anything into it.
+lane: a named tab in this project's shared Windows Terminal window -- or a
+window of its own where a tab would take the owner's focus (TABS IN ONE
+WINDOW, WITHOUT TAKING FOCUS, below) -- coloured so the room can be read at a
+glance, already running its first instruction so nobody types anything into
+it.
 
 WHERE THERE IS NO WINDOWS TERMINAL -- macOS, Linux, or Windows without `wt.exe`
 on PATH -- nothing is guessed. The open makes every check it always makes,
@@ -116,6 +118,65 @@ opened. The CLI's session list is ACCOUNT-WIDE -- on 2026-09-18 it showed about
 a hundred Fantasy Football sessions beside this project's -- so "everything
 listed" is never the answer to "which windows are mine".
 
+A Windows Terminal open also records `focus`: the window in front just before
+the open and a second after (`wt.FocusCheck`, read only): `moved_by_open` when
+the window in front after is the one this open created, which prints
+`FOCUS MOVED: <before> -> <after>`, and `moved_by_other` when the front went
+anywhere else -- the owner's own Alt+Tab, which is never flagged. It also
+records `placement`, tab or own window, and the rule that chose it. It is the standing
+proof of the owner's 2026-11-07 ruling that no open takes their focus -- the
+first real open says whether it held, with nobody remembering to check.
+
+TABS IN ONE WINDOW, WITHOUT TAKING FOCUS
+----------------------------------------
+The owner, 2026-11-07, playing: a lane opening must never pull their focus,
+with no if-then -- and, once a window of its own per open had stopped that,
+"Can we have both of those things, like the minimized and staying in the one
+window as tabs?". Measured that evening on Terminal 1.24.12741.0, with the
+game in front: a tab joining the shared window took the front every time the
+window was open; a tab joining it while it was MINIMIZED did not, three runs
+of three (Terminal restored it behind the game). Terminal has no other route:
+no no-focus option, and `move-pane` cannot name another window.
+
+So :func:`placement` decides each open, in order:
+
+1. `coordination/window_mode.json` holds a verdict: a window of its own.
+2. The shared window is the window in front -- the owner is typing in it: a
+   window of its own, since a joining tab would become their selected tab and
+   take their keystrokes. Not a trial.
+3. Otherwise a tab in the shared window, minimized first (`wt.tuck`, which
+   never touches the window in front and activates nothing), then
+   :data:`TUCK_SETTLE` before the join.
+
+THE FIRST LIVE TRIAL FAILED, 2026-11-07 21:51: a lane joined with
+the game in front and took it (`FOCUS MOVED: the game -> ✳ <the lane>`),
+and the verdict was written. The shared window carried project names, so it was
+found and minimized; the held joins differed in one way, a 0.4-0.5 s pause
+after the minimize, which that open did not have. The pause is in now, and the
+record carries `shared_found` and `tucked`, so the next trial says whether the
+minimize happened. The verdict stands until the owner says to try again.
+
+Every tabs open is a trial. One whose own window took the front (FOCUS MOVED)
+writes the verdict, and from then on every open is a window of its own, for
+good; nobody has to remember the result. What the owner sees: the shared
+window minimizes each time a lane opens while they are elsewhere -- also when
+it was showing on another monitor.
+
+THE STARTER KIT'S FOLDER, AND WHICH WINDOW GETS A DESK HOME
+-----------------------------------------------------------
+A lane whose row in the desk record owns a path in the Starter Kit
+(`desk_record.py`, THE STARTER KIT) opens with `--add-dir <the kit's root>`,
+so its first edit there does not stop at a permission pop-up nobody is at the
+screen to answer -- a fresh open, a `--resume` and a `-2` reopen alike, since
+each reads the lane's row. No other window gets it: a standing permission
+change is the owner's (desk build-1107, 2026-11-07).
+
+The desk home goes to a LANE only. A desk opened by another desk (`/play`'s
+build desk) is a desk of its own, and with the opener's home in its
+environment a bare desk command acted on the opener's record instead of being
+refused (lane play-route, 2026-11-07). The launch record keeps `home` for
+every open, which `play_watch.py --build-grant` reads.
+
 Exit codes:
     0 = done (or a dry run that would have been)
     2 = refused, or the launch failed; stderr says why
@@ -139,8 +200,8 @@ from typing import NamedTuple, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import project_identity as identity  # noqa: E402
-from wt import (TerminalError, Window, command_line, launch, manual_line,  # noqa: E402
-                window_command)
+from wt import (TerminalError, Window, command_line, front_window, launch,  # noqa: E402
+                manual_line, terminal_windows_titled, tuck, window_command)
 from wt import available as wt_available  # noqa: E402
 
 # The Windows console is cp1252 and cannot encode the arrows and check marks
@@ -159,12 +220,6 @@ CLAUDE = "claude"
 ROLES = ("desk", "lane")
 DESK_ROLE = "desk"
 LANE_ROLE = "lane"
-
-#: The Windows Terminal window every role window opens a tab in. A NAME rather
-#: than `0` ("most recently used"), which is whichever window last had focus --
-#: the owner's -- so a mis-fire there is a lane's tab appearing where they are
-#: typing. Derived from the project folder's name (`scripts/project_identity.py`).
-SHARED_WINDOW = identity.SHARED_WINDOW
 
 #: How a window is opened: as a Windows Terminal tab, or by the owner pasting
 #: the printed line into a tab of their own (:func:`launch_mode`). Recorded as
@@ -360,6 +415,29 @@ REMOTE_CONTROL_FLAG = "--remote-control"
 NO_REMOTE_CONTROL_FLAG = "--no-remote-control"
 
 RECORD = REPO / "coordination" / "launch_record.jsonl"
+
+#: The Windows Terminal window desk and lane TABS open in. A NAME rather than
+#: `0` ("most recently used"), which is whichever window last had focus -- the
+#: owner's. Derived from the project folder's name (`scripts/project_identity.py`).
+SHARED_WINDOW = identity.SHARED_WINDOW
+
+#: How a Windows Terminal open places its window (the docstring's TABS IN ONE
+#: WINDOW, WITHOUT TAKING FOCUS): a tab in :data:`SHARED_WINDOW`, or a window of
+#: its own.
+TABS = "tabs"
+OWN_WINDOW = "own-window"
+
+#: The verdict on tabs. Absent: every open that can join is a tabs open, and
+#: each one is a trial. Written once, the first time a tabs open's own window
+#: took the front: from then on every open is a window of its own, for good.
+WINDOW_MODE = REPO / "coordination" / "window_mode.json"
+
+#: Seconds between minimizing the shared window and the join. The three joins
+#: that held on 2026-11-07 came 0.4-0.5 s after the minimize; the first live
+#: tabs open, with no pause, took the front -- and Windows animates a minimize
+#: on this machine (SPI_GETANIMATION on), while reporting the window minimized
+#: the moment it is asked, so the state cannot be polled for the end of it.
+TUCK_SETTLE = 0.5
 
 #: Where `--close` plants the marker and where the window it closes looks for
 #: it. The system temp directory: the path is baked into the window's command
@@ -614,17 +692,43 @@ def tab_color(role: str, model: str) -> str | None:
     return DESK_TAB_COLOR if role == DESK_ROLE else LANE_TAB_COLORS.get(model)
 
 
+def kit_dirs(role: str, name: str) -> list[str]:
+    """The folders this window opens with `--add-dir`: the Starter Kit's root
+    for a lane whose row in this desk's record owns a kit path, none for any
+    other window (the docstring's THE STARTER KIT'S FOLDER). An unreadable
+    record adds nothing; the stamped-sheet check says what is wrong with it."""
+    if role != LANE_ROLE:
+        return []
+    import desk_record
+
+    try:
+        record = desk_record.read_record()
+    except desk_record.DeskError:
+        return []
+    row = ((record or {}).get("lanes") or {}).get(name) or {}
+    if any(desk_record.kit_rel(path) is not None for path in row.get("owns", [])):
+        return [str(desk_record.kit_root())]
+    return []
+
+
+def add_dir_args(dirs: Sequence[str]) -> list[str]:
+    """`--add-dir <folder>`, one flag a folder: the CLI's value is a list, and
+    a flag of its own for each keeps the next word from being taken for one."""
+    return [word for folder in dirs for word in ("--add-dir", folder)]
+
+
 def window_for(role: str, name: str, task: str | None, model: str, *,
-               resume: bool, remote_control: bool | None = None) -> Window:
+               resume: bool, remote_control: bool | None = None,
+               add_dirs: Sequence[str] = (), join: str | None = None) -> Window:
     """The window to open, as `wt` wants it.
 
     `--resume` opens the persisted session by name and carries NO role prompt:
     that window is already in role. Remote Control follows
     :func:`wants_remote_control`: `remote_control` None is the role's default
     (a desk on, a lane off), and True or False is the command line's word,
-    on a resume as on a fresh open.
+    on a resume as on a fresh open. `add_dirs` are :func:`kit_dirs`'s folders.
     """
-    argv: list[str] = [CLAUDE, "--model", model, *permission_args(),
+    argv: list[str] = [CLAUDE, "--model", model, *permission_args(), *add_dir_args(add_dirs),
                        *remote_control_args(name, wants_remote_control(role, remote_control))]
     if resume:
         argv += ["--resume", name]
@@ -637,15 +741,17 @@ def window_for(role: str, name: str, task: str | None, model: str, *,
         # after its session ends is a dead window that still looks live.
         keep_open=False,
         close_marker=str(close_marker_path(name)),
-        window_target=SHARED_WINDOW,
+        join=join,
         tab_title=name,
         tab_color=tab_color(role, model),
         # What `scripts/lane_guard.py` reads: a window knows its own role from
         # the moment it starts, with nothing to remember and nobody to ask.
-        # The desk's home goes too (`scripts/desk_home.py`), so the lane's
-        # `desk_record.py show` and `report-done` reach its own desk's record.
+        # The desk's home goes to a lane (`scripts/desk_home.py`), so its
+        # `desk_record.py show` and `report-done` reach its own desk's record
+        # -- never to a desk, which runs its own home (the docstring's WHICH
+        # WINDOW GETS A DESK HOME).
         env=((identity.ROLE_ENV, role), (identity.WINDOW_ENV, name),
-             *lane_home_env()),
+             *(lane_home_env() if role == LANE_ROLE else ())),
     )
 
 
@@ -721,6 +827,80 @@ def latest_by_name(rows: Sequence[dict]) -> dict[str, dict]:
 
 def now_stamp() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# --- tabs in one window, without taking focus ---------------------------------
+
+
+class Placement(NamedTuple):
+    """Where one open's window goes: ``method`` is :data:`TABS` or
+    :data:`OWN_WINDOW`, ``why`` says which rule chose it, and ``shared`` is
+    every window found carrying one of this project's names."""
+
+    method: str
+    why: str
+    shared: tuple[int, ...] = ()
+
+
+def read_window_mode(path: Path | None = None) -> dict | None:
+    """The verdict file, or ``None`` while tabs are on trial. A file that is
+    not JSON is refused: guessing would decide the owner's focus on a guess."""
+    path = WINDOW_MODE if path is None else path
+    if not path.exists():
+        return None
+    try:
+        verdict = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise TerminalError(f"{path} is not JSON ({exc})") from exc
+    if not isinstance(verdict, dict) or verdict.get("mode") != OWN_WINDOW:
+        raise TerminalError(f"{path} says {verdict!r}; the one verdict it holds is "
+                            f'{{"mode": "{OWN_WINDOW}", ...}}')
+    return verdict
+
+
+def write_tabs_verdict(name: str, before: str, after: str, path: Path | None = None) -> None:
+    """Tabs took the front: every later open is a window of its own, for good."""
+    path = WINDOW_MODE if path is None else path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "mode": OWN_WINDOW, "at": now_stamp(), "name": name,
+        "why": f"FOCUS MOVED: {before or '(nothing)'} -> {after or '(nothing)'}",
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def project_names(live_here: Sequence[dict]) -> list[str]:
+    """Every name a window of this project has carried: the record's opens and
+    the sessions live here. The shared window's title is one of them -- the
+    name of the tab selected in it."""
+    names = {str(row["name"]) for row in read_record() if row.get("name")}
+    names |= {str(row["name"]) for row in live_here if row.get("name")}
+    return sorted(names)
+
+
+def placement(names: Sequence[str]) -> Placement:
+    """Where this open's window goes. Three rules, in order:
+
+    1. A verdict on file means a tabs open once took the front: a window of
+       its own.
+    2. The shared window IS the window in front -- the owner is typing in one
+       of its tabs: a window of its own, because a joining tab would become
+       their selected tab and take their keystrokes. Not a trial.
+    3. Otherwise a tab in the shared window, which the open minimizes first
+       (:func:`wt.tuck`) -- the one state in which a joining tab was measured
+       not to take the front.
+    """
+    verdict = read_window_mode()
+    if verdict is not None:
+        # The verdict's own words stay in the file: repeating its FOCUS MOVED
+        # line here would read as a new theft on every later open.
+        return Placement(OWN_WINDOW, f"tabs are off for good: a tab took the front at "
+                                     f"{verdict.get('at')} ({WINDOW_MODE.name})")
+    shared = tuple(terminal_windows_titled(names))
+    front = front_window().handle
+    if front is not None and front in shared:
+        return Placement(OWN_WINDOW, "the shared window is in front: a tab joining it "
+                                     "would take the selected tab", shared)
+    return Placement(TABS, "a tab in the shared window, minimized first", shared)
 
 
 # --- what is live -----------------------------------------------------------
@@ -1543,11 +1723,14 @@ def run(argv: Sequence[str] = ()) -> int:
         tier = tier_choice(args.role, model, args.reason)
         cwd = session_cwd()
         remote_control = wants_remote_control(args.role, args.remote_control)
-        window = window_for(args.role, name, args.task, tier.model,
-                            resume=args.resume, remote_control=remote_control)
         mode = launch_mode()
-        command = window_command(window, cwd=cwd) if mode == OPENED_BY_WT else None
         live_here = here(live_sessions())
+        place = placement(project_names(live_here)) if mode == OPENED_BY_WT else None
+        window = window_for(args.role, name, args.task, tier.model,
+                            resume=args.resume, remote_control=remote_control,
+                            add_dirs=kit_dirs(args.role, name),
+                            join=SHARED_WINDOW if place and place.method == TABS else None)
+        command = window_command(window, cwd=cwd) if mode == OPENED_BY_WT else None
         if not args.resume:
             refuse_a_taken_name(name, live_here)
         if args.role == LANE_ROLE:
@@ -1559,13 +1742,18 @@ def run(argv: Sequence[str] = ()) -> int:
         return 2
 
     if command is not None:
-        print(f"{window.label} as a tab in the {window.window_target!r} window, "
-              f"{window.tab_color or 'uncoloured'}")
+        where = (f"as a tab in the {SHARED_WINDOW!r} window" if place.method == TABS
+                 else "in a window of its own")
+        print(f"{window.label} {where}, {window.tab_color or 'uncoloured'}")
+        print(f"  placed: {place.why}")
     else:
         print(f"{window.label}, opened by hand: {manual_reason()}")
     print(f"  model: {tier.model} - {tier.reason}: {tier.why}")
     print(f"  first instruction: {window.argv[-1]}")
     print(f"  remote control: {remote_control_says(args.role, name, args.remote_control)}")
+    for at, word in enumerate(window.argv[:-1]):
+        if word == "--add-dir":
+            print(f"  added folder (the Starter Kit): {window.argv[at + 1]}")
     if command is not None:
         print(f"  closes its pane on: {window.close_marker}")
         print(f"  {command_line(command)}")
@@ -1578,16 +1766,40 @@ def run(argv: Sequence[str] = ()) -> int:
     # A marker from a PREVIOUS window of this name would make this window's
     # first crash look deliberate and close the pane over the error.
     close_marker_path(name).unlink(missing_ok=True)
+    focus = None
+    tucked: list[int] = []
     if command is None:
         print_manual_open(window, cwd)
     else:
+        if place.method == TABS:
+            # The one state in which a joining tab was measured not to take the
+            # front: the window it joins is minimized. Never the window in
+            # front, and nothing is activated (`wt.tuck`). Then the pause the
+            # held joins had (:data:`TUCK_SETTLE`).
+            tucked = tuck(place.shared)
+            if tucked:
+                sleep(TUCK_SETTLE)
         try:
-            launch(command)
+            check = launch(command)
         except (TerminalError, subprocess.CalledProcessError, OSError) as exc:
             # No window, but the first instruction above is the whole of what
             # would have been typed into one, so the manual path is on screen.
             print(f"FAIL - {exc}", file=sys.stderr)
             return 2
+        # Every real open proves it took no focus, or names what took it
+        # (`wt.FocusCheck`): recorded, and printed loud only when the window
+        # this open created is the one in front.
+        focus = {"before": check.before, "after": check.after,
+                 "moved_by_open": check.moved_by_open,
+                 "moved_by_other": check.moved_by_other}
+        if check.warning():
+            print(check.warning())
+        if place.method == TABS and check.moved_by_open:
+            # Every tabs open is a trial, and one that took the front ends tabs
+            # for good: nobody has to remember the result.
+            write_tabs_verdict(name, check.before, check.after)
+            print(f"TABS OFF FOR GOOD - this tab took the front; every later open is "
+                  f"a window of its own (verdict: {WINDOW_MODE})")
     # AFTER THE LAUNCH, so the record never claims a window that did not open.
     # A manual open is recorded at once: the line is the open, and the lane's
     # ack is what tells the desk the owner pasted it.
@@ -1598,6 +1810,13 @@ def run(argv: Sequence[str] = ()) -> int:
         "opened_by": OPENED_BY_WT if command is not None else OPENED_BY_MANUAL,
         "remote_control": remote_control,
         "home": desk_home() or None,
+        "placement": place.method if place else None,
+        "placement_why": place.why if place else None,
+        # What a failed trial is read from: the shared windows found by name,
+        # and the ones this open minimized before joining.
+        "shared_found": list(place.shared) if place else None,
+        "tucked": tucked if place else None,
+        "focus": focus,
     })
     return 0
 

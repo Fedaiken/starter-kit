@@ -86,13 +86,14 @@ def test_an_empty_argv_is_refused():
 # --- the argv ---------------------------------------------------------------
 
 
-def test_a_window_target_builds_a_tab_and_no_target_builds_a_window():
-    tab = window_command(
-        Window(label="x", argv=("claude",), window_target="shared-window"), cwd=REPO)
+def test_a_join_builds_a_tab_and_no_join_builds_a_window_of_its_own():
+    tab = window_command(Window(label="x", argv=("claude",), join="shared-window"), cwd=REPO)
     assert tab[:4] == ["wt.exe", "-w", "shared-window", "new-tab"]
-    own = window_command(Window(label="x", argv=("claude",)), cwd=REPO)
+    own = window_command(Window(label="x", argv=("claude",), tab_title="lane-alpha",
+                                tab_color="#4169E1", keep_open=False,
+                                close_marker="C:/tmp/x.closing"), cwd=REPO)
     assert own[:3] == ["wt.exe", "-w", "new"]
-    assert "new-tab" not in own
+    assert "new-tab" not in own and own.count("-w") == 1
 
 
 def test_the_working_directory_with_a_space_is_one_token():
@@ -105,7 +106,7 @@ def test_the_working_directory_with_a_space_is_one_token():
 
 def test_a_title_and_a_colour_reach_the_command_line():
     command = window_command(
-        Window(label="x", argv=("claude",), window_target="shared-window",
+        Window(label="x", argv=("claude",),
                tab_title="lane-alpha", tab_color="#4169E1"), cwd=REPO)
     assert command[command.index("--title") + 1] == "lane-alpha"
     assert command[command.index("--tabColor") + 1] == "#4169E1"
@@ -225,14 +226,199 @@ def test_the_audit_is_looking_at_something():
     assert all(_HEADLESS_SHAPE.search(name) for name in wt.HEADLESS_MARKERS)
 
 
-def test_launch_cleans_the_environment_without_being_asked(monkeypatch):
-    seen = {}
+@pytest.fixture
+def quiet_front(monkeypatch):
+    """A launch with no real Terminal, no real front window and no wait.
+    Returns the list `front_window` is read from, one entry per read. Window
+    500 is a Terminal window that was already open (the owner's desk)."""
+    fronts = [wt.Front(101, "the game"), wt.Front(101, "the game")]
     monkeypatch.setattr(wt, "available", lambda: True)
+    monkeypatch.setattr(wt, "front_window", lambda: fronts.pop(0))
+    monkeypatch.setattr(wt, "terminal_windows", lambda: frozenset({500}))
+    monkeypatch.setattr(wt.time, "sleep", lambda seconds: None)
+    return fronts
+
+
+def test_launch_cleans_the_environment_without_being_asked(monkeypatch, quiet_front):
+    seen = {}
     monkeypatch.setattr(
         wt.subprocess, "run",
-        lambda command, check, env: seen.update(command=command, env=env))
+        lambda command, check, env, startupinfo: seen.update(command=command, env=env))
     wt.launch(["wt.exe", "x"], env={"CLAUDECODE": "1", "NO_COLOR": "1", "PATH": "p"})
     assert seen["env"] == {"PATH": "p"}
+
+
+# --- an open never takes the owner's focus ------------------------------------
+#
+# The owner, 2026-11-07, playing: every lane that opened "pops me out of the
+# game". Their ruling: no open ever takes focus, with no if-then. The game
+# minimizes itself on losing the front, so the front must never be taken: the
+# window starts minimized and not activated (wt.py, AN OPEN NEVER TAKES THE
+# OWNER'S FOCUS). No test here launches a real window: test launches landed on
+# the owner's play. The proof is the FocusCheck every real open returns.
+
+LANE_OPEN = ["wt.exe", "-w", "new", "--title", "lane-alpha", "-d", "C:/x", "powershell.exe"]
+
+
+def test_every_launch_starts_minimized_and_not_activated(monkeypatch, quiet_front):
+    if os.name != "nt":
+        pytest.skip("STARTUPINFO is Windows-only")
+    seen = {}
+    monkeypatch.setattr(wt.subprocess, "run",
+                        lambda command, check, env, startupinfo: seen.update(info=startupinfo))
+    wt.launch(LANE_OPEN)
+    info = seen["info"]
+    assert info.dwFlags & subprocess.STARTF_USESHOWWINDOW, "the show state is ignored without the flag"
+    assert info.wShowWindow == 7 == wt.SW_SHOWMINNOACTIVE
+
+
+def test_off_windows_there_is_no_startup_info_and_no_front(monkeypatch):
+    monkeypatch.setattr(wt.os, "name", "posix")
+    assert wt.startup_info() is None
+    assert wt.front_window() == wt.Front(None)
+    assert wt.terminal_windows() == frozenset()
+
+
+def test_launch_has_no_switch_for_it():
+    """No if-then (the owner, 2026-11-07): nothing a caller passes turns it off."""
+    import inspect
+    assert list(inspect.signature(wt.launch).parameters) == ["command", "env"]
+
+
+def test_an_open_that_left_the_front_alone_says_so(monkeypatch, quiet_front):
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: None)
+    check = wt.launch(LANE_OPEN)
+    assert check == wt.FocusCheck("the game", "the game", moved_by_open=False, moved_by_other=False)
+    assert check.warning() is None
+
+
+def test_the_window_the_open_created_taking_the_front_is_flagged(monkeypatch, quiet_front):
+    """A Terminal window that was not there before the open is the open's."""
+    quiet_front[1] = wt.Front(202, "PowerShell", terminal=True)
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: None)
+    check = wt.launch(LANE_OPEN)
+    assert check.moved_by_open and not check.moved_by_other
+    assert check.warning() == "FOCUS MOVED: the game -> PowerShell"
+
+
+def test_a_window_titled_as_the_open_taking_the_front_is_flagged(monkeypatch, quiet_front):
+    """Claude retitles its window `✳ <name>`: the open's own --title, at the end."""
+    quiet_front[1] = wt.Front(202, "\u2733 lane-alpha")
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: None)
+    assert wt.launch(LANE_OPEN).moved_by_open
+
+
+def test_the_owners_own_alt_tab_is_recorded_never_flagged(monkeypatch, quiet_front):
+    """Measured 2026-11-07 at the desk: FOCUS MOVED: Task Switching -> ✳ syxplay
+    was the owner's own Alt+Tab to a window that was already open."""
+    quiet_front[:] = [wt.Front(77, "Task Switching"), wt.Front(500, "\u2733 syxplay", terminal=True)]
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: None)
+    check = wt.launch(LANE_OPEN)
+    assert check.moved_by_other and not check.moved_by_open
+    assert check.warning() is None
+
+
+def test_a_name_inside_another_name_is_not_the_open(monkeypatch, quiet_front):
+    quiet_front[1] = wt.Front(600, "\u2733 lane-alpha-2")
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: None)
+    check = wt.launch(LANE_OPEN)
+    assert check.moved_by_other and not check.moved_by_open
+
+
+def test_the_front_is_compared_by_window_not_by_title(monkeypatch, quiet_front):
+    """A Claude tab retitles itself with a working glyph every second: the same
+    window under a new title has not moved."""
+    quiet_front[:] = [wt.Front(500, "\u25d0 lane-alpha", True), wt.Front(500, "\u25d1 lane-alpha", True)]
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: None)
+    check = wt.launch(LANE_OPEN)
+    assert not check.moved_by_open and not check.moved_by_other
+
+
+def test_nothing_in_front_reads_as_nothing():
+    check = wt.FocusCheck("", "lane-alpha", moved_by_open=True, moved_by_other=False)
+    assert check.warning() == "FOCUS MOVED: (nothing) -> lane-alpha"
+
+
+def test_the_window_title_is_read_off_the_invocation():
+    assert wt.window_title(LANE_OPEN) == "lane-alpha"
+    assert wt.window_title(["wt.exe", "-w", "new"]) is None
+    assert wt.window_title(["wt.exe", "--title"]) is None
+
+
+def test_the_front_is_read_after_the_wait_and_the_windows_before_the_open(monkeypatch, quiet_front):
+    order = []
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: order.append("open"))
+    monkeypatch.setattr(wt.time, "sleep", lambda seconds: order.append(("wait", seconds)))
+    reads = list(quiet_front)
+    monkeypatch.setattr(wt, "front_window", lambda: order.append("read") or reads.pop(0))
+    monkeypatch.setattr(wt, "terminal_windows", lambda: order.append("windows") or frozenset())
+    wt.launch(LANE_OPEN)
+    assert order == ["read", "windows", "open", ("wait", wt.FOCUS_CHECK_DELAY), "read"]
+
+
+@needs_powershell
+def test_the_real_readers_answer_on_this_machine():
+    front = wt.front_window()
+    assert front.handle is None or (isinstance(front.handle, int) and isinstance(front.title, str))
+    windows = wt.terminal_windows()
+    assert all(isinstance(handle, int) for handle in windows)
+    if front.terminal:
+        assert front.handle in windows
+
+
+def test_nothing_here_can_move_the_front():
+    """A hand-back -- giving the front back after Terminal took it -- was built
+    and shipped on 2026-11-07. The game had minimized itself by then, and the
+    hand-back pushed the owner back to the game from whatever else they were
+    doing. The reader reads; nothing in this module may move the front."""
+    source = Path(wt.__file__).read_text(encoding="utf-8")
+    for call in ("SetForegroundWindow", "AttachThreadInput", "keybd_event",
+                 "SendInput", "BringWindowToTop", "SwitchToThisWindow"):
+        # Whole words: `wShowWindow`, the start-up show state, is not the call.
+        assert not re.search(rf"\b{call}\b", source), f"{call} moves the front"
+    # The one window change allowed is `tuck`'s: minimize, never activating.
+    shows = re.findall(r"\bShowWindow\(([^)]*)\)", source)
+    assert shows == ["handle, SW_SHOWMINNOACTIVE"], shows
+
+
+# --- tabs in one window: the shared window is minimized before a join ---------
+
+
+def test_a_title_is_a_name_with_or_without_its_glyph():
+    assert wt.titled_as("lane-alpha", "lane-alpha")
+    assert wt.titled_as("✳ lane-alpha", "lane-alpha")
+    assert not wt.titled_as("✳ lane-alpha-2", "lane-alpha")
+    assert not wt.titled_as("xlane-alpha", "lane-alpha")
+    assert not wt.titled_as("anything", "")
+
+
+def test_tuck_and_the_title_reader_do_nothing_off_windows(monkeypatch):
+    monkeypatch.setattr(wt.os, "name", "posix")
+    assert wt.tuck([1, 2]) == []
+    assert wt.terminal_windows_titled(["desk"]) == []
+
+
+@needs_powershell
+def test_tuck_never_touches_the_window_in_front():
+    """Asked to tuck the window in front, it does nothing -- the one case in
+    which minimizing could change what the owner sees in front of them."""
+    front = wt.front_window()
+    if front.handle is None:
+        pytest.skip("nothing in front to ask about")
+    assert wt.tuck([front.handle]) == []
+    assert wt.front_window().handle == front.handle
+
+
+@needs_powershell
+def test_the_title_reader_finds_only_terminal_windows():
+    windows = wt.terminal_windows()
+    names = []
+    for handle in sorted(windows)[:3]:
+        ctypes, _, user = wt._user32()
+        title = wt._text(ctypes, user.GetWindowTextW, handle)
+        if title:
+            names.append(title.split()[-1])
+    assert set(wt.terminal_windows_titled(names)) <= windows
 
 
 def test_no_terminal_is_a_refusal_not_a_traceback(monkeypatch):
@@ -265,7 +451,7 @@ LANE_WINDOW = Window(
     argv=("claude", "--model", "opus", "--permission-mode", "acceptEdits",
           "--name", "lane-alpha", "/lane lane-alpha coordination/task_sheets/lane-alpha.md"),
     keep_open=False, close_marker="/tmp/boat-log-terminal-lane-alpha.closing",
-    window_target="boat-log", tab_title="lane-alpha", tab_color="#4169E1",
+    tab_title="lane-alpha", tab_color="#4169E1",
     env=(("BOAT_LOG_ROLE", "lane"), ("BOAT_LOG_WINDOW", "lane-alpha")),
 )
 

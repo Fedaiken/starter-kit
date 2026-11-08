@@ -35,6 +35,18 @@ to remember, in the only order that works:
      with no budget row, or one over its ceiling, stops the save the same way,
      and the index is put back as it was. The index is not rendered when it is
      recorded as another window's or another live desk holds it;
+     then, when a lane owned a path in the Starter Kit (`desk_record.py`,
+     THE STARTER KIT), the kit's commit: one commit IN THE KIT REPO, by
+     path, of the changed kit files lanes own, from the same message, pushed
+     to the kit's `origin` at once; its hash is printed. It comes before the
+     close because it is the one a rerun could not redo: a kit commit that
+     fails refuses the save with nothing closed and nothing saved, and a
+     project commit that fails after it leaves the kit's commit made and
+     pushed, so the rerun saves the project alone. A failed kit push is said
+     as plainly as a failed project push and ends the save with exit 3
+     (Savecraft, 2026-11-07, the owner: "can we just cut the back and
+     forth?" -- a kit fix is a lane's like any other, and the desk's one save
+     is still the only one);
   2. `desk_record.py close-desk` -- the record, sheets and done files move under
      `closed/<stamp>/` in the desk's home;
   3. one commit, by path, of: every changed file a lane or the desk owns, plus
@@ -61,9 +73,10 @@ Exit codes:
     0 = saved and pushed (or, with --dry-run, the list was printed)
     1 = refused: a changed file without exactly one owner, a lane still open,
         or the document gate failing
-    2 = no desk record, not the desk, git could not be read, or the commit
+    2 = no desk record, not the desk, git could not be read, or a commit
         failed (the closed desk is put back; run the save again)
-    3 = the commit was made and the push FAILED -- say so to the owner in that turn
+    3 = the commits were made and a push FAILED, the project's or the
+        Starter Kit's -- say so to the owner in that turn
 """
 
 from __future__ import annotations
@@ -198,6 +211,44 @@ def owned_changes(record: dict) -> tuple[list[str], list[str], list[str]]:
     return mine, failures, theirs
 
 
+def kit_split(paths: Sequence[str]) -> tuple[list[str], list[str]]:
+    """(the project's paths, the Starter Kit's) of `paths`, order kept."""
+    kit = [p for p in paths if dr.kit_rel(p) is not None]
+    return [p for p in paths if p not in set(kit)], kit
+
+
+def commit_kit(message: str, owned: Sequence[str]) -> tuple[str | None, str | None]:
+    """(the kit commit's short hash, None), or (None, why it failed): one
+    commit in the Starter Kit's repo, by path, of the kit paths `owned`, from
+    the save's own message. A new file is made known to git with `git add -N`
+    first, and taken back out when the commit fails."""
+    root = dr.kit_root()
+    if root is None:
+        return None, f"the Starter Kit ({dr.kit_root_text()}) is gone"
+    inside = [dr.kit_rel(p) for p in owned]
+    try:
+        new = sorted(untracked(root) & set(inside))
+    except dr.DeskError as exc:
+        return None, f"in the Starter Kit: {exc}"
+    if new:
+        proc = git(root, "add", "-N", paths=new)
+        if proc.returncode != 0:
+            return None, f"`git add -N` in the Starter Kit failed: {said(proc)}"
+    proc = git(root, "commit", "-m", message, paths=inside)
+    if proc.returncode != 0:
+        if new:
+            git(root, "reset", "-q", paths=new)
+        return None, f"`git commit` in the Starter Kit failed: {said(proc)}"
+    head = git(root, "rev-parse", "--short", "HEAD")
+    return head.stdout.decode("utf-8", "replace").strip() or "(no hash)", None
+
+
+def push_kit() -> str | None:
+    """Why the Starter Kit's push failed, or None when it went to `origin`."""
+    proc = git(dr.kit_root(), "push", "origin", "HEAD")
+    return None if proc.returncode == 0 else said(proc)
+
+
 def restore(target: Path, new: Sequence[str]) -> int:
     """After a commit that FAILED: put the closed desk back, so the record is
     live again and the save can simply run again. Exit 2 either way.
@@ -271,14 +322,40 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
         if renders:
             print(f"would render: {KB_INDEX} ({DOC_GATE.as_posix()} --write-kb), "
                   f"saved in the commit if that changes it")
-        for path in mine:
+        project, kit = kit_split(mine)
+        for path in project:
             print(f"would save: {path}")
-        print(f"DRY RUN - {len(mine)} path(s), plus whatever closing the desk moves "
-              f"under {dr.HOME}/. Nothing was closed or saved.")
+        for path in kit:
+            print(f"would save in the Starter Kit ({dr.kit_root_text()}): {dr.kit_rel(path)}")
+        print(f"DRY RUN - {len(project)} path(s)"
+              + (f" and {len(kit)} in the Starter Kit's own commit" if kit else "")
+              + f", plus whatever closing the desk moves under {dr.HOME}/. "
+              f"Nothing was closed or saved.")
         return 0
 
     if rendered:
         print(f"rendered: {KB_INDEX}")
+    # The Starter Kit's commit, before the close (the docstring, step 1's end).
+    mine, kit = kit_split(mine)
+    kit_hash: str | None = None
+    kit_push_failed: str | None = None
+    if kit:
+        kit_hash, failed = commit_kit(message, kit)
+        if failed is not None:
+            if rendered:
+                unrender(before)
+            print(f"FAIL - {failed}\nNothing was closed and nothing was saved, here or "
+                  f"in the kit: run the save again.", file=sys.stderr)
+            return 2
+        print(f"SAVED IN THE STARTER KIT - commit {kit_hash}, {len(kit)} path(s) in "
+              f"{dr.kit_root_text()}")
+        if push:
+            kit_push_failed = push_kit()
+            if kit_push_failed is None:
+                print("PUSHED - the Starter Kit's origin")
+            else:
+                print(f"KIT PUSH FAILED - kit commit {kit_hash} is local only. Tell the "
+                      f"owner now.\n{kit_push_failed}", file=sys.stderr)
     target = dr.archive_desk(desk)
     print(f"desk closed; its record is under {target.relative_to(dr.REPO).as_posix()}")
 
@@ -318,8 +395,9 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
                     or (dr.covers(dr.HOME, p) and dr.another_desks_claim(p, others) is None)})
     paths = [p for p in paths if p not in set(theirs)]
     if not paths:
-        print("NOTHING TO SAVE - the desk is closed and no owned file changed.")
-        return 0
+        print("NOTHING TO SAVE - the desk is closed and no owned file changed"
+              + (" here." if kit else "."))
+        return 3 if kit_push_failed is not None else 0
     new = sorted(untracked(dr.REPO) & set(paths))
     failed = None
     if new:
@@ -342,6 +420,10 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
                 ledger_path.unlink()
             else:
                 ledger_path.write_bytes(ledger_before)
+        if kit:
+            print(f"the Starter Kit's commit {kit_hash} stands"
+                  + (" and is NOT pushed -- tell the owner now" if kit_push_failed else "")
+                  + "; the rerun saves this project alone", file=sys.stderr)
         return restore(target, new)
     print(f"SAVED - {len(paths)} path(s) in one commit: {message}")
     if not push:
@@ -352,6 +434,10 @@ def save(desk: str, message: str, *, dry_run: bool = False, push: bool = True) -
               file=sys.stderr)
         return 3
     print("PUSHED - origin/main")
+    if kit_push_failed is not None:
+        print(f"KIT PUSH FAILED - repeated: kit commit {kit_hash} is local only. Tell "
+              f"the owner now.", file=sys.stderr)
+        return 3
     return 0
 
 

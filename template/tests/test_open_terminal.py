@@ -54,7 +54,24 @@ def room(tmp_path, monkeypatch):
     monkeypatch.setattr(ot, "session_cwd", lambda: str(REPO))
     monkeypatch.setattr(ot, "live_sessions", lambda: list(state["live"]))
     monkeypatch.setattr(ot, "own_ancestry", lambda: set())
-    monkeypatch.setattr(ot, "launch", lambda command: state["launched"].append(command))
+    # `launch` returns what was in front before and after; the default is an
+    # open that left it alone. A test that needs a moved front sets "focus".
+    state["focus"] = wt.FocusCheck("the game", "the game", moved_by_open=False,
+                                    moved_by_other=False)
+    monkeypatch.setattr(ot, "launch",
+                        lambda command: state["launched"].append(command) or state["focus"])
+    # Tabs placement, with no real windows: the shared window's handles, the
+    # window in front, and what `tuck` was asked to minimize.
+    state["shared"], state["front"], state["tucked"] = [], wt.Front(101, "the game"), []
+    monkeypatch.setattr(ot, "WINDOW_MODE", tmp_path / "coordination" / "window_mode.json")
+    monkeypatch.setattr(ot, "terminal_windows_titled", lambda names: list(state["shared"]))
+    monkeypatch.setattr(ot, "front_window", lambda: state["front"])
+    # `tuck` minimizes every handle it is given; the pause after it is recorded,
+    # not slept.
+    monkeypatch.setattr(ot, "tuck",
+                        lambda handles: state["tucked"].append(list(handles)) or list(handles))
+    state["slept"] = []
+    monkeypatch.setattr(ot, "sleep", lambda seconds: state["slept"].append(seconds))
     # The suite runs inside a desk's or a lane's window, which carries its desk
     # home in the environment; an open here must not inherit that.
     monkeypatch.delenv(pi.DESK_HOME_ENV, raising=False)
@@ -333,7 +350,10 @@ def test_the_window_is_a_named_coloured_tab_with_the_model_written_out(room):
     assert window.argv == (
         "claude", "--model", "opus", "--permission-mode", "acceptEdits",
         "--name", "lane-alpha", "/lane lane-alpha sheet.md")
-    assert window.window_target == ot.SHARED_WINDOW
+    assert window.join is None, "a window joins only when placement says so"
+    joined = ot.window_for("lane", "lane-alpha", "sheet.md", "opus", resume=False,
+                           join=ot.SHARED_WINDOW)
+    assert joined.join == ot.SHARED_WINDOW
     assert window.tab_title == "lane-alpha"
     assert window.keep_open is False
     assert window.close_marker.endswith(pi.CLOSE_MARKER_PREFIX + "lane-alpha.closing")
@@ -384,7 +404,10 @@ def test_a_dry_run_opens_nothing_and_records_nothing(room, capsys):
     assert ot.main([*LANE, "--reason", OPUS_JOB, "--dry-run"]) == 0
     assert room["launched"] == []
     assert not ot.RECORD.exists()
-    assert f"wt.exe -w {pi.SHARED_WINDOW} new-tab" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"wt.exe -w {pi.SHARED_WINDOW} new-tab" in out
+    assert f"as a tab in the {pi.SHARED_WINDOW!r} window" in out
+    assert room["tucked"] == [], "a dry run minimized a window"
 
 
 def test_a_dry_run_refuses_exactly_what_a_real_open_refuses(room, capsys):
@@ -402,6 +425,177 @@ def test_an_open_launches_and_writes_the_record(room):
         "event": "open", "name": "lane-alpha", "role": "lane", "reason": OPUS_JOB,
         "model": "opus", "task": "coordination/task_sheets/lane-alpha.md"}
     assert entry["at"], "the record does not say when"
+
+
+def test_an_open_records_that_the_front_stayed_put(room, capsys):
+    """The standing proof of the owner's 2026-11-07 ruling: every real open
+    records the window in front before and after."""
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    (entry,) = record()
+    assert entry["focus"] == {"before": "the game", "after": "the game",
+                              "moved_by_open": False, "moved_by_other": False}
+    assert "FOCUS MOVED" not in capsys.readouterr().out
+
+
+def test_an_open_that_took_the_front_says_so_loud_and_records_it(room, capsys):
+    room["focus"] = wt.FocusCheck("the game", "lane-alpha", moved_by_open=True,
+                                   moved_by_other=False)
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert "FOCUS MOVED: the game -> lane-alpha" in capsys.readouterr().out
+    (entry,) = record()
+    assert entry["focus"] == {"before": "the game", "after": "lane-alpha",
+                              "moved_by_open": True, "moved_by_other": False}
+
+
+def test_the_owners_own_alt_tab_is_recorded_but_never_printed(room, capsys):
+    """Measured 2026-11-07: "FOCUS MOVED: Task Switching -> ✳ syxplay" was the
+    owner's own Alt+Tab, not the open."""
+    room["focus"] = wt.FocusCheck("Task Switching", "✳ syxplay", moved_by_open=False,
+                                   moved_by_other=True)
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert "FOCUS MOVED" not in capsys.readouterr().out
+    (entry,) = record()
+    assert entry["focus"]["moved_by_other"] is True and entry["focus"]["moved_by_open"] is False
+
+
+def test_every_kind_of_open_carries_the_focus_check(room, capsys):
+    """Lane, desk, --resume and a -2 reopen all reach Terminal through the one
+    `launch`, so each records the check."""
+    room["focus"] = wt.FocusCheck("a", "b", moved_by_open=True, moved_by_other=False)
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert ot.main(["--role", "desk", "--name", "desk-beta", "--model", "fable",
+                    "--fable-approved-by-owner"]) == 0
+    assert ot.main(["--role", "lane", "--name", "lane-alpha", "--resume",
+                    "--reason", OPUS_JOB]) == 0
+    assert ot.main(["--role", "lane", "--name", "lane-alpha-2", "--task",
+                    "coordination/task_sheets/lane-alpha-2.md", "--reason", OPUS_JOB]) == 0
+    entries = record()
+    assert [(e["name"], e["resumed"]) for e in entries] == [
+        ("lane-alpha", False), ("desk-beta", False), ("lane-alpha", True), ("lane-alpha-2", False)]
+    assert all(e["focus"]["moved_by_open"] is True for e in entries)
+    assert capsys.readouterr().out.count("FOCUS MOVED: a -> b") == 4
+
+
+# --- tabs in one window, without taking focus ---------------------------------
+#
+# The owner, 2026-11-07: "Can we have both of those things, like the minimized
+# and staying in the one window as tabs?" -- and, of the route below, "keep the
+# exception, that's fine". A tab joining the shared window took the front unless
+# the window was minimized; so it is minimized first, an open while the owner is
+# IN it gets a window of its own, and every tabs open is a trial whose failure
+# ends tabs for good.
+
+SHARED = 4400
+
+
+def test_the_shared_window_behind_is_minimized_and_then_joined(room, capsys):
+    room["shared"] = [SHARED]
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert room["tucked"] == [[SHARED]]
+    assert room["launched"][0][:4] == ["wt.exe", "-w", pi.SHARED_WINDOW, "new-tab"]
+    (entry,) = record()
+    assert entry["placement"] == ot.TABS
+    assert entry["shared_found"] == [SHARED] and entry["tucked"] == [SHARED]
+
+
+def test_the_join_waits_out_the_minimize(room, monkeypatch):
+    """2026-11-07 21:51: the first live tabs open joined at once after the
+    minimize and took the front; the three that held had paused 0.4-0.5 s."""
+    order = []
+    room["shared"] = [SHARED]
+    monkeypatch.setattr(ot, "tuck", lambda handles: order.append("tuck") or list(handles))
+    monkeypatch.setattr(ot, "sleep", lambda seconds: order.append(("pause", seconds)))
+    monkeypatch.setattr(ot, "launch", lambda command: order.append("join") or room["focus"])
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert order == ["tuck", ("pause", ot.TUCK_SETTLE), "join"]
+    assert ot.TUCK_SETTLE >= 0.4
+
+
+def test_no_shared_window_yet_is_a_join_that_creates_it(room):
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert room["tucked"] == [[]]
+    assert room["slept"] == [], "nothing was minimized, so there is nothing to wait out"
+    assert room["launched"][0][:4] == ["wt.exe", "-w", pi.SHARED_WINDOW, "new-tab"]
+    (entry,) = record()
+    assert entry["shared_found"] == [] and entry["tucked"] == []
+
+
+def test_the_shared_window_in_front_gets_no_join_and_no_trial(room, capsys):
+    """The owner typing in a tab there: a joining tab would become their
+    selected tab. A window of its own, nothing minimized, nothing judged."""
+    room["shared"], room["front"] = [SHARED], wt.Front(SHARED, "✳ advisor", True)
+    room["focus"] = wt.FocusCheck("✳ advisor", "lane-alpha", moved_by_open=True,
+                                  moved_by_other=False)
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert room["tucked"] == []
+    assert room["launched"][0][:3] == ["wt.exe", "-w", "new"]
+    (entry,) = record()
+    assert entry["placement"] == ot.OWN_WINDOW and "in front" in entry["placement_why"]
+    assert not ot.WINDOW_MODE.exists(), "an open that did not join was judged as a trial"
+
+
+def test_a_tabs_open_that_took_the_front_ends_tabs_for_good(room, capsys):
+    room["shared"] = [SHARED]
+    room["focus"] = wt.FocusCheck("the game", "lane-alpha", moved_by_open=True,
+                                  moved_by_other=False)
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    out = capsys.readouterr().out
+    assert "FOCUS MOVED: the game -> lane-alpha" in out and "TABS OFF FOR GOOD" in out
+    verdict = json.loads(ot.WINDOW_MODE.read_text(encoding="utf-8"))
+    assert verdict["mode"] == ot.OWN_WINDOW and verdict["name"] == "lane-alpha"
+    assert verdict["why"] == "FOCUS MOVED: the game -> lane-alpha"
+    # The next open falls back, and minimizes nothing.
+    room["focus"] = wt.FocusCheck("the game", "the game", moved_by_open=False,
+                                  moved_by_other=False)
+    room["tucked"].clear()
+    assert ot.main(["--role", "lane", "--name", "lane-beta", "--task",
+                    "coordination/task_sheets/lane-beta.md", "--reason", OPUS_JOB]) == 0
+    assert room["launched"][1][:3] == ["wt.exe", "-w", "new"] and room["tucked"] == []
+    assert record()[-1]["placement"] == ot.OWN_WINDOW
+
+
+def test_a_held_trial_keeps_tabs_on(room):
+    room["shared"] = [SHARED]
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert ot.main(["--role", "lane", "--name", "lane-beta", "--task",
+                    "coordination/task_sheets/lane-beta.md", "--reason", OPUS_JOB]) == 0
+    assert not ot.WINDOW_MODE.exists()
+    assert [e["placement"] for e in record()] == [ot.TABS, ot.TABS]
+    assert room["tucked"] == [[SHARED], [SHARED]]
+
+
+def test_the_owners_alt_tab_during_a_tabs_open_does_not_end_tabs(room):
+    room["shared"] = [SHARED]
+    room["focus"] = wt.FocusCheck("Task Switching", "✳ syxplay", moved_by_open=False,
+                                  moved_by_other=True)
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert not ot.WINDOW_MODE.exists()
+
+
+@pytest.mark.parametrize("text", ["not json", '{"mode": "tabs"}', "[]"])
+def test_a_verdict_file_that_cannot_be_read_is_refused(room, capsys, text):
+    ot.WINDOW_MODE.parent.mkdir(parents=True, exist_ok=True)
+    ot.WINDOW_MODE.write_text(text, encoding="utf-8")
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 2
+    assert room["launched"] == []
+
+
+def test_the_shared_window_is_found_by_every_name_this_project_has_carried(room, monkeypatch):
+    ot.append_record({"event": "open", "name": "syxplay"})
+    seen = {}
+    monkeypatch.setattr(ot, "terminal_windows_titled",
+                        lambda names: seen.update(names=list(names)) or [])
+    room["live"] = [session("advisor")]
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    assert {"syxplay", "advisor"} <= set(seen["names"])
+
+
+def test_an_open_by_hand_records_no_focus_check(room, monkeypatch):
+    """No Terminal launched, so there is no before and after to read."""
+    monkeypatch.setattr(ot, "launch_mode", lambda: ot.OPENED_BY_MANUAL)
+    assert ot.main([*LANE, "--reason", OPUS_JOB]) == 0
+    (entry,) = record()
+    assert entry["focus"] is None
 
 
 def test_a_launch_that_failed_is_not_recorded(room, monkeypatch, capsys):
@@ -1373,3 +1567,77 @@ def test_a_lane_that_asked_or_is_only_between_turns_is_not_flagged(desk, monkeyp
 
 def test_a_window_this_desk_never_stamped_is_not_its_idle_lane(room, monkeypatch, tmp_path):
     assert ot.idle_not_done_line("stray", state("stray", 5)) is None
+
+
+# --- the Starter Kit's folder, and which window gets a desk home ------------------
+
+
+@pytest.fixture
+def kit_lanes(room, tmp_path_factory, monkeypatch):
+    """A Starter Kit folder the setting names, and a record whose `kit-lane`
+    and `kit-lane-2` (its reopen) own a kit file and `lane-alpha` does not."""
+    kit = tmp_path_factory.mktemp("Starter_Kit").resolve()
+    monkeypatch.setattr(dr, "STARTER_KIT_DIR", str(kit))
+    owned = f"{kit.as_posix()}/template/scripts/desk_record.py"
+    dr.write_record({"desk": "the-desk", "lanes": {
+        "kit-lane": {"owns": [owned], "closed": "2026-11-07T21:00:00"},
+        "kit-lane-2": {"owns": [owned]},
+        "lane-alpha": {"owns": ["records/2025/January"]},
+    }})
+    return str(kit)
+
+
+def test_only_a_lane_that_owns_a_kit_path_is_given_the_kits_folder(kit_lanes):
+    assert ot.kit_dirs("lane", "kit-lane") == [kit_lanes]
+    assert ot.kit_dirs("lane", "kit-lane-2") == [kit_lanes]
+    assert ot.kit_dirs("lane", "lane-alpha") == []
+    assert ot.kit_dirs("lane", "never-stamped") == []
+    assert ot.kit_dirs("desk", "kit-lane") == []
+
+
+def test_no_record_adds_no_folder(room):
+    assert ot.kit_dirs("lane", "kit-lane") == []
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_the_kit_folder_is_its_own_flag_before_the_name_or_the_resume(kit_lanes, resume):
+    argv = ot.window_for("lane", "kit-lane", None if resume else "sheet.md", "opus",
+                         resume=resume, remote_control=True, add_dirs=[kit_lanes]).argv
+    at = argv.index("--add-dir")
+    assert argv[at + 1] == kit_lanes
+    assert argv[at + 2].startswith("--"), "the folder list must end at the next flag"
+    assert argv[-2:] == ("--resume", "kit-lane") if resume else argv[-3] == "--name"
+    plain = ot.window_for("lane", "lane-alpha", "sheet.md", "opus", resume=False).argv
+    assert "--add-dir" not in plain
+
+
+@pytest.mark.parametrize("name, extra", [
+    ("kit-lane", ["--resume"]),                         # the lane resumed
+    ("kit-lane-2", []),                                 # its -2 reopen, fresh
+])
+def test_the_open_carries_the_kit_folder_on_a_fresh_open_and_a_resume(kit_lanes, capsys,
+                                                                       name, extra):
+    task = f"coordination/task_sheets/{name}.md"
+    assert ot.main(["--role", "lane", "--name", name, "--task", task, "--reason", OPUS_JOB,
+                    *extra, "--dry-run"]) == 0
+    assert f"added folder (the Starter Kit): {kit_lanes}" in capsys.readouterr().out
+    assert ot.main([*LANE, "--reason", OPUS_JOB, "--dry-run"]) == 0
+    assert "added folder" not in capsys.readouterr().out
+
+
+def test_a_desk_window_is_given_no_desk_home_and_a_lane_window_is(room, monkeypatch):
+    monkeypatch.setenv(pi.DESK_HOME_ENV, "build-1107")
+    desk = dict(ot.window_for("desk", "build-desk", None, "opus", resume=False).env)
+    assert pi.DESK_HOME_ENV not in desk and desk[pi.ROLE_ENV] == "desk"
+    resumed = dict(ot.window_for("desk", "build-desk", None, "opus", resume=True).env)
+    assert pi.DESK_HOME_ENV not in resumed
+    lane = dict(ot.window_for("lane", "lane-alpha", "s.md", "opus", resume=False).env)
+    assert lane[pi.DESK_HOME_ENV] == "build-1107"
+
+
+def test_the_launch_record_keeps_the_home_for_a_desk_window(room, monkeypatch):
+    """`play_watch.py --build-grant` reads `home` off the desk's open."""
+    monkeypatch.setenv(pi.DESK_HOME_ENV, "play-1107")
+    assert ot.main(["--role", "desk", "--name", "build-desk", "--model", "fable",
+                    "--fable-approved-by-owner"]) == 0
+    assert record()[-1]["home"] == "play-1107" and record()[-1]["role"] == "desk"

@@ -132,6 +132,27 @@ and the ownership check and the save read another desk's files as that
 desk's, never as strays. `coordination/` itself stays a home for a record
 left there before homes (inherit it, save it); nothing new opens there.
 
+THE STARTER KIT, THE ONE ROOT OUTSIDE THE PROJECT
+-------------------------------------------------
+Savecraft, 2026-11-07, the owner: "you always tell me this thing about the
+starter kit having to do it itself, and I always tell you that Claude's never
+run there, and you have to do it, and then you do it. So can we just cut the
+back and forth?" A fix that belongs in the Starter Kit used to be ungivable:
+every path outside the project was refused, so the desk fell back on "a
+window in the kit folder". So ONE root outside the project is accepted: the
+kit's, named once in `STARTER_KIT_DIR` (from the project root, so no account
+name is written down and it holds for every project seeded beside the kit;
+inside the kit itself it names no folder, and nothing outside is accepted). A
+sheet names a kit path absolute (`C:/.../Starter_Kit/template/x.py`) or from
+the project root (`../Starter_Kit/template/x.py`); `clean_path` writes it in
+one form, the kit root's own spelling plus the path inside it, so every
+overlap and live-lane check reads it as it reads a project path. The
+ownership check reads the kit repo's changes beside the project's, each
+checked against the desk's baseline, and `scripts/desk_save.py` commits the
+owned kit paths in the kit repo, by path, as part of the one save. The kit's
+root itself, its `.git`, and every other path outside the project are still
+refused.
+
 Exit codes:
     0 = done
     2 = refused; stderr says why and names the remedy
@@ -182,6 +203,12 @@ SHARED_LAUNCH_RECORD = f"{COORDINATION}/launch_record.jsonl"
 #: (carried from slice 1).
 DESK_LANE = "desk"
 NL = chr(10)
+
+#: The Starter Kit's root, from the project root: the one folder outside the
+#: project a sheet may name (the docstring's THE STARTER KIT). Read through
+#: `kit_root`, which is None on a machine without the folder -- and inside the
+#: kit itself, where it names none.
+STARTER_KIT_DIR = "../Starter_Kit"
 
 _HOME_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -581,23 +608,78 @@ class DeskError(Exception):
 # --- paths ------------------------------------------------------------------
 
 
+def kit_root() -> Path | None:
+    """The Starter Kit's root as this machine spells it, or None when the
+    folder `STARTER_KIT_DIR` names is not here."""
+    root = (REPO / STARTER_KIT_DIR).resolve()
+    return root if root.is_dir() else None
+
+
+def kit_rel(path: str) -> str | None:
+    """Where a path `clean_path` returned sits inside the kit repo, or None
+    when it is not a kit path."""
+    root = kit_root()
+    if root is None:
+        return None
+    top = root.as_posix()
+    if path.casefold().startswith(top.casefold() + "/"):
+        return path[len(top) + 1:]
+    return None
+
+
+def kit_path(path: str) -> str | None:
+    """`path` (forward slashes) in the one form a kit path is written in --
+    the kit root's own spelling, `/`, the path inside the kit -- or None when
+    it does not point inside the kit. Absolute, or from the project root
+    through `..`; anything else is a project path and None."""
+    parts = path.split("/")
+    absolute = path.startswith("/") or ":" in parts[0]
+    if not absolute and ".." not in parts:
+        return None
+    root = kit_root()
+    if root is None:
+        return None
+    full = Path(os.path.normpath(Path(path) if absolute else REPO / path)).as_posix()
+    top = root.as_posix()
+    if not full.casefold().startswith(top.casefold() + "/"):
+        return None
+    inside = full[len(top) + 1:]
+    if inside.split("/")[0].casefold() == ".git":
+        raise DeskError(f"{path!r} is inside the Starter Kit's `.git`, which no lane owns")
+    return f"{top}/{inside}"
+
+
+def kit_root_text() -> str:
+    root = kit_root()
+    return (root.as_posix() if root is not None
+            else f"{STARTER_KIT_DIR} from the project root, which is not on this machine")
+
+
 def clean_path(raw: str) -> str:
-    """A repo-relative path, forward slashes, no trailing slash -- or a refusal.
+    """A repo-relative path, forward slashes, no trailing slash -- a path
+    inside the Starter Kit in its one form (`kit_path`) -- or a refusal.
 
     Repo-relative is a format rule, not a preference: a path outside the
     project sends a lane at a folder the harness stops to ask the owner
-    about, with nobody at that screen.
+    about, with nobody at that screen. The kit is the one exception (the
+    docstring's THE STARTER KIT): the opener adds its folder to a lane that
+    owns a kit path, so no pop-up stops it.
     """
     path = raw.strip().strip("`").replace("\\", "/").rstrip("/")
     while path.startswith("./"):
         path = path[2:]
+    kit = kit_path(path) if path else None
+    if kit is not None:
+        return kit
     parts = path.split("/")
     if (not path or path == "." or path.startswith("/") or ":" in parts[0]
             or ".." in parts or parts[0] == ".git"):
         raise DeskError(
             f"{raw!r} is not a path inside this project. Paths are "
             f"repo-relative (e.g. records/2025/March.md), never absolute, "
-            f"never `..`, never the whole project"
+            f"never `..`, never the whole project. The one root outside it a "
+            f"path may name is the Starter Kit's ({kit_root_text()}), and a "
+            f"path inside it, never the kit itself"
         )
     return path
 
@@ -826,6 +908,20 @@ def git_changed(repo: Path | None = None) -> list[str]:
     return sorted(set(found))
 
 
+def kit_changed() -> list[str]:
+    """Every path git lists as changed or untracked in the Starter Kit's repo,
+    in the one form a kit path is written in (`kit_path`); none when the kit
+    or its repo is not on this machine."""
+    root = kit_root()
+    if root is None or not (root / ".git").exists():
+        return []
+    try:
+        inside = git_changed(root)
+    except DeskError as exc:
+        raise DeskError(f"in the Starter Kit ({root.as_posix()}): {exc}") from exc
+    return [f"{root.as_posix()}/{path}" for path in inside]
+
+
 def file_stamp(repo: Path, path: str) -> list[int] | None:
     try:
         stat = (repo / path).stat()
@@ -838,16 +934,21 @@ def take_baseline(repo: Path | None = None) -> dict:
     """What was ALREADY changed when the desk opened, with each file's size and
     time. The owner's tree is rarely clean (an Inbox drop, a session's audio
     folder), and those files are nobody's lane. A baseline file that changes
-    AFTERWARDS no longer matches its stamp and is checked like any other."""
+    AFTERWARDS no longer matches its stamp and is checked like any other. The
+    Starter Kit's changes are taken the same way, each by its kit path."""
     repo = REPO if repo is None else repo
-    return {path: file_stamp(repo, path) for path in git_changed(repo)
-            if not covers(COORDINATION, path)}
+    baseline = {path: file_stamp(repo, path) for path in git_changed(repo)
+                if not covers(COORDINATION, path)}
+    baseline.update({path: file_stamp(repo, path) for path in kit_changed()})
+    return baseline
 
 
 def changed_since_baseline(record: dict, repo: Path | None = None) -> list[str]:
+    """What changed since the desk opened: the project's files, then the
+    Starter Kit's, each by its kit path (the docstring's THE STARTER KIT)."""
     repo = REPO if repo is None else repo
     baseline = record.get("baseline", {})
-    return [path for path in git_changed(repo)
+    return [path for path in git_changed(repo) + kit_changed()
             if path not in baseline or baseline[path] != file_stamp(repo, path)]
 
 
@@ -1634,12 +1735,18 @@ def stamp(desk: str, lane: str, sheet: str) -> list[str]:
     if existing and is_closed(existing):
         raise DeskError(f"{lane!r} is recorded as closed; a new piece of work is a new lane name")
     moved = take_from_closed(record, lane, owns)
+    # A RESTAMP keeps what `own` gave the lane since: the record, not the
+    # sheet, is the grant, and a restamp that reset `owns` to the sheet's list
+    # silently took four files from a working lane (Savecraft, 2026-11-07).
+    # Taking one back is `disown`, an act of its own.
+    kept = [p for p in (existing or {}).get("owns", [])
+            if not any(covers(o, p) for o in owns)]
     fields = parse_sheet(text)[0]
     at = working_since_now(lane)
     record["lanes"][lane] = {
         "sheet": path, "sha256": sheet_digest(text), "stamped_at": now_iso(),
         "unit": fields["unit"], "reason": fields["reason"].split()[0],
-        "owns": owns, "working_since": at, "working_since_iso": now_iso(),
+        "owns": owns + kept, "working_since": at, "working_since_iso": now_iso(),
         "closed": None,
     }
     plan = record["plan"]
@@ -1652,6 +1759,8 @@ def stamp(desk: str, lane: str, sheet: str) -> list[str]:
     write_record(record)
     return [f"stamped {path} for {lane} ({record['lanes'][lane]['sha256'][:12]}); "
             f"{lane} owns {owns}", *(f"  {line}" for line in moved),
+            *([f"  kept, given by `own` since the last stamp: {kept} -- `disown` "
+               f"takes one back"] if kept else []),
             *([changed] if changed else []), *([unreadable] if unreadable else [])]
 
 

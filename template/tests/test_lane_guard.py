@@ -99,6 +99,20 @@ def test_the_git_rule_keeps_the_shape_desk_record_imports():
     assert "commit" in lg.REFUSED and "push" in lg.REFUSED
 
 
+@pytest.mark.parametrize("command, tool", [
+    ("git -C C:/Users/someone/Claude/Starter_Kit commit -m x", "Bash"),
+    ("cd ../Starter_Kit && git add template/scripts/x.py", "Bash"),
+    ("git -C ..\\Starter_Kit push origin main", "PowerShell"),
+])
+def test_a_lane_saves_nothing_in_the_starter_kit_either(command, tool):
+    """A lane may own kit paths (`desk_record.py`, THE STARTER KIT); the kit's
+    commit is the desk's one save's too (`desk_save.py`), so the guard refuses
+    git's save commands aimed at the kit repo as at this one."""
+    said = lg.verdict(shell(command, tool), LANE)
+    assert said is not None
+    assert "only the desk saves" in said or "staging is part" in said
+
+
 def test_main_exits_2_with_the_reason_on_stderr(monkeypatch, capsys):
     monkeypatch.setenv(pi.ROLE_ENV, "lane")
     monkeypatch.setenv(pi.WINDOW_ENV, "lane-alpha")
