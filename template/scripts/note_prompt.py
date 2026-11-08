@@ -31,6 +31,15 @@ the session it was added to defend:
    already holding a pop-up. The worst this script may do is miss a line.
 3. IT NEVER PROMPTS. A hook is a subprocess, not a tool call.
 
+AUTO MODE (2026-11-07). The log also holds one row each time a desk's or a
+lane's window goes into auto mode and one when it leaves (`MODE_EVENT`),
+written by `scripts/lane_guard.py`, which refuses such a window's tool calls
+while it is there. A refused window is not "waiting", so the stall lookup
+never finds it; `auto_mode_windows` does, and every desk act's banner names
+the tab (`open_terminal.stalled_lines`) until the window's next call shows
+the mode back. The owner, 2026-11-07: "I think the new launcher's messing up
+and opening lanes with auto mode on instead of accept edits on".
+
 Registered in the tracked `.claude/settings.json`. The log,
 `coordination/prompts.jsonl`, is gitignored: machine-local stall telemetry.
 
@@ -125,6 +134,85 @@ def read_log(log: Path) -> list[dict]:
     return found
 
 
+# --- a desk or lane window in auto mode (2026-11-07) ---------------------------
+
+#: The `event` of the rows the lane guard writes here when a desk's or a lane's
+#: window enters auto mode or leaves it. They are not pop-ups: the report and
+#: the stall lookup skip them.
+MODE_EVENT = "PermissionMode"
+#: The `permission_mode` value Claude Code hands a hook in auto mode.
+AUTO_MODE = "auto"
+
+
+def mode_rows(log: Path) -> list[dict]:
+    """The mode rows of both generations of the log, oldest first. Only the
+    lines naming MODE_EVENT are parsed: the guard asks on every tool call."""
+    rows: list[dict] = []
+    for path in (log.with_suffix(".jsonl.1"), log):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            if MODE_EVENT not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except (json.JSONDecodeError, UnicodeError):
+                continue
+            if isinstance(row, dict) and row.get("event") == MODE_EVENT:
+                rows.append(row)
+    return rows
+
+
+def in_auto_mode(log: Path | None = None) -> dict[str, dict]:
+    """Session id -> the row that put it in auto mode, for every window whose
+    last mode row says it went into auto mode."""
+    found: dict[str, dict] = {}
+    for row in mode_rows(LOG if log is None else log):
+        session = str(row.get("session"))
+        if row.get("mode") == AUTO_MODE:
+            found[session] = row
+        else:
+            found.pop(session, None)
+    return found
+
+
+def note_mode(payload: dict, window: str | None, *, log: Path | None = None,
+              now: datetime | None = None) -> bool:
+    """Record a desk's or a lane's switch into auto mode, and its switch back:
+    one row each way, however many tool calls come between. The lane guard
+    calls it on every tool call it is handed in such a window; the mode back
+    is seen at the window's next call. True when it wrote a row."""
+    log = LOG if log is None else log
+    session = payload.get("session_id")
+    mode = payload.get("permission_mode")
+    if not (isinstance(session, str) and session and isinstance(mode, str) and mode):
+        return False
+    auto = mode == AUTO_MODE
+    if (session in in_auto_mode(log)) == auto:
+        return False
+    now = datetime.now().astimezone() if now is None else now
+    append(log, {
+        "when": now.isoformat(timespec="seconds"),
+        "session": session,
+        "event": MODE_EVENT,
+        "tool": "permission mode",
+        "mode": mode,
+        "window": window or "?",
+        "what": f"{window or '?'} {'went into auto mode' if auto else 'left auto mode for ' + mode}",
+    })
+    return True
+
+
+def auto_mode_windows(live_here: Sequence[dict], *, log: Path | None = None) -> list[str]:
+    """The names of the live windows on record as in auto mode, sorted -- for
+    the banner every desk act prints (`open_terminal.stalled_lines`)."""
+    found = in_auto_mode(log)
+    return sorted(str(row.get("name")) for row in live_here
+                  if str(row.get("sessionId")) in found)
+
+
 def session_names() -> dict[str, str]:
     """Session id -> window name, for what is live now. Best effort: a stalled
     lane is still live, which is the case this report exists for."""
@@ -139,7 +227,7 @@ def session_names() -> dict[str, str]:
 
 
 def report(log: Path, names: dict[str, str]) -> int:
-    rows = read_log(log)
+    rows = [row for row in read_log(log) if row.get("event") != MODE_EVENT]
     if not rows:
         print(f"no permission pop-ups recorded in {log}")
         return 0

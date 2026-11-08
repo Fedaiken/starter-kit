@@ -129,6 +129,81 @@ def test_main_allows_and_survives_a_bad_payload(monkeypatch):
     assert lg.main() == 0
 
 
+# --- a desk or lane window in auto mode (2026-11-07) ---------------------------
+
+AUTO_SAID = "this window is in auto mode; Shift+Tab back to accept edits, then go on."
+
+
+def in_mode(mode, command="git status", tool="Bash"):
+    """The hook's input JSON as Claude Code hands it: `permission_mode` beside
+    the tool (https://code.claude.com/docs/en/hooks, retrieved 2026-11-07)."""
+    payload = {**shell(command, tool), "session_id": "s-lane-alpha"}
+    if mode is not None:
+        payload["permission_mode"] = mode
+    return payload
+
+
+@pytest.mark.parametrize("role", ["lane", "desk"])
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_a_lane_or_desk_in_auto_mode_is_refused_with_the_fix(role, tool):
+    said = lg.verdict(in_mode("auto", tool=tool), {pi.ROLE_ENV: role, pi.WINDOW_ENV: "w"})
+    assert said == AUTO_SAID
+
+
+def test_auto_mode_is_refused_on_whatever_tool_the_hook_is_handed():
+    """The hook is wired on the shell tools; a wider matcher needs no change here."""
+    payload = {"tool_name": "Edit", "tool_input": {"file_path": "x.md"},
+               "permission_mode": "auto"}
+    assert lg.verdict(payload, LANE) == AUTO_SAID
+
+
+@pytest.mark.parametrize("mode", ["acceptEdits", "default", "plan", None])
+def test_a_lane_in_any_other_mode_goes_on(mode):
+    assert lg.verdict(in_mode(mode), LANE) is None
+
+
+@pytest.mark.parametrize("mode", ["auto", "acceptEdits", None])
+def test_a_window_with_no_role_is_untouched_whatever_the_mode(mode):
+    assert lg.verdict(in_mode(mode, "git commit -m x"), {}) is None
+
+
+def test_main_refuses_auto_mode_with_exit_2_and_hands_the_switch_to_the_log(
+        monkeypatch, capsys):
+    """The guard hands every call in a desk or lane window to
+    `note_prompt.note_mode`, which records the switch for the desk's banner."""
+    import note_prompt
+    seen = []
+    monkeypatch.setattr(note_prompt, "note_mode",
+                        lambda payload, window: seen.append((payload, window)),
+                        raising=False)
+    monkeypatch.setenv(pi.ROLE_ENV, "lane")
+    monkeypatch.setenv(pi.WINDOW_ENV, "lane-alpha")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(in_mode("auto"))))
+    assert lg.main() == 2
+    assert capsys.readouterr().err.strip() == AUTO_SAID
+    assert seen == [(in_mode("auto"), "lane-alpha")]
+    monkeypatch.delenv(pi.ROLE_ENV)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(in_mode("auto"))))
+    assert lg.main() == 0
+    assert len(seen) == 1, "a window with no role is never recorded"
+
+
+@pytest.mark.parametrize("broken", ["raises", "missing"])
+def test_a_record_that_cannot_be_written_never_breaks_the_guard(monkeypatch, capsys, broken):
+    import note_prompt
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("the log is gone")
+    if broken == "raises":
+        monkeypatch.setattr(note_prompt, "note_mode", boom, raising=False)
+    else:
+        monkeypatch.delattr(note_prompt, "note_mode", raising=False)
+    monkeypatch.setenv(pi.ROLE_ENV, "lane")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(in_mode("auto"))))
+    assert lg.main() == 2
+    assert AUTO_SAID in capsys.readouterr().err
+
+
 # --- recursive deletes outside the scratchpad (F57), Windows paths -------------
 
 #: A stand-in Windows machine: home, temp folder and project on drives no real

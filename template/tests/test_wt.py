@@ -8,12 +8,16 @@ is what the shell hands the program after parsing, and the only way to know
 that is to ask a shell.
 """
 import base64
+import hashlib
+import io
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -233,6 +237,7 @@ def quiet_front(monkeypatch):
     500 is a Terminal window that was already open (the owner's desk)."""
     fronts = [wt.Front(101, "the game"), wt.Front(101, "the game")]
     monkeypatch.setattr(wt, "available", lambda: True)
+    monkeypatch.setattr(wt, "second_terminal", lambda: None)
     monkeypatch.setattr(wt, "front_window", lambda: fronts.pop(0))
     monkeypatch.setattr(wt, "terminal_windows", lambda: frozenset({500}))
     monkeypatch.setattr(wt.time, "sleep", lambda seconds: None)
@@ -419,6 +424,256 @@ def test_the_title_reader_finds_only_terminal_windows():
         if title:
             names.append(title.split()[-1])
     assert set(wt.terminal_windows_titled(names)) <= windows
+
+
+# --- with a Terminal window in front: the second copy --------------------------
+#
+# wt.py, WITH A TERMINAL WINDOW IN FRONT. Nothing here downloads, installs or
+# opens anything: the second copy is the owner's to install.
+
+SECOND = r"C:\second\wt.exe"
+INSTALLED_IMAGE = r"C:\Program Files\WindowsApps\Terminal\WindowsTerminal.exe"
+SECOND_IMAGE = r"C:\second\WindowsTerminal.exe"
+JOIN_OPEN = ["wt.exe", "-w", "shared", "new-tab", "--title", "lane-alpha", "powershell.exe"]
+
+
+def test_with_no_second_copy_a_new_window_opens_exactly_as_before(monkeypatch, quiet_front):
+    """Both desks open through this file. Until the owner installs the second
+    copy, nothing about an open may change: one direct start of `wt.exe`,
+    minimized and not activated, no WMI and no download."""
+    if os.name != "nt":
+        pytest.skip("STARTUPINFO is Windows-only")
+    calls = []
+    monkeypatch.setattr(wt.subprocess, "run",
+                        lambda command, check, env, startupinfo: calls.append((command, check, env, startupinfo)))
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("an open with no second copy went another way")
+
+    monkeypatch.setattr(wt, "_start_detached", refuse)
+    monkeypatch.setattr(wt.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(wt, "install_second_terminal", refuse)
+    wt.launch(LANE_OPEN, env={"CLAUDECODE": "1", "PATH": "p"})
+    assert len(calls) == 1
+    command, check, env, info = calls[0]
+    assert (command, check, env) == (LANE_OPEN, True, {"PATH": "p"})
+    assert info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+    assert info.wShowWindow == wt.SW_SHOWMINNOACTIVE
+
+
+@pytest.fixture
+def second_installed(monkeypatch, quiet_front):
+    """A launch with the second copy installed. Returns the detached starts."""
+    started = []
+    monkeypatch.setattr(wt, "second_terminal", lambda: SECOND)
+    monkeypatch.setattr(wt, "_start_detached", lambda command, env: started.append((command, env)))
+    return started
+
+
+def _no_direct_start(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("a new window was started from this process")
+
+    monkeypatch.setattr(wt.subprocess, "run", refuse)
+
+
+def test_with_the_installed_terminal_in_front_the_second_copy_opens_it(monkeypatch, quiet_front, second_installed):
+    quiet_front[0] = wt.Front(500, "\u2733 syxplay", terminal=True)
+    monkeypatch.setattr(wt, "image_of", lambda handle: INSTALLED_IMAGE)
+    _no_direct_start(monkeypatch)
+    wt.launch(LANE_OPEN, env={"CLAUDECODE": "1", "PATH": "p"})
+    assert second_installed == [([SECOND, *LANE_OPEN[1:]], {"PATH": "p"})]
+
+
+def test_with_the_second_copy_in_front_the_installed_terminal_opens_it(monkeypatch, quiet_front, second_installed):
+    quiet_front[0] = wt.Front(700, "\u2733 lane-beta", terminal=True)
+    monkeypatch.setattr(wt, "image_of", lambda handle: SECOND_IMAGE)
+    _no_direct_start(monkeypatch)
+    wt.launch(LANE_OPEN)
+    assert second_installed[0][0] == LANE_OPEN
+
+
+def test_with_anything_else_in_front_the_installed_terminal_opens_it(monkeypatch, quiet_front, second_installed):
+    _no_direct_start(monkeypatch)
+    wt.launch(LANE_OPEN)
+    assert second_installed[0][0] == LANE_OPEN
+
+
+def test_a_terminal_window_whose_program_cannot_be_read_goes_to_the_second_copy(monkeypatch):
+    monkeypatch.setattr(wt, "image_of", lambda handle: "")
+    assert wt.terminal_for(wt.Front(500, "x", terminal=True), second=SECOND) == SECOND
+
+
+def test_a_join_is_never_detached(monkeypatch, quiet_front, second_installed):
+    """The named window lives in one copy of Terminal; only it can take the tab."""
+    calls = []
+    monkeypatch.setattr(wt.subprocess, "run", lambda command, **kw: calls.append(command))
+    wt.launch(JOIN_OPEN)
+    assert calls == [JOIN_OPEN] and second_installed == []
+
+
+def test_only_dash_w_new_is_a_new_window():
+    assert wt.is_new_window(LANE_OPEN)
+    assert not wt.is_new_window(JOIN_OPEN)
+    assert not wt.is_new_window(["wt.exe", "x"])
+
+
+@pytest.fixture
+def detached(monkeypatch, tmp_path):
+    """`_start_detached` with no real WMI: `started` is what it ran, and
+    `answer` is what the windowless launcher reports."""
+    (tmp_path / "pythonw.exe").write_text("", encoding="utf-8")
+    monkeypatch.setattr(wt.sys, "executable", str(tmp_path / "python.exe"))
+    monkeypatch.setattr(wt.tempfile, "tempdir", str(tmp_path))
+    state = {"started": [], "payload": None, "answer": "0", "exit": 0}
+
+    def fake_run(command, capture_output, check):
+        state["started"].append(command)
+        payload = next(tmp_path.glob("wt-open-*.json"))
+        state["payload"] = json.loads(payload.read_text(encoding="utf-8"))
+        if state["answer"] is not None:
+            Path(str(payload) + ".rc").write_text(state["answer"], encoding="utf-8")
+        return subprocess.CompletedProcess(command, state["exit"])
+
+    monkeypatch.setattr(wt.subprocess, "run", fake_run)
+    state["tmp"] = tmp_path
+    return state
+
+
+def _left_behind(state):
+    return sorted(p.name for p in state["tmp"].iterdir() if p.name != "pythonw.exe")
+
+
+def test_the_detached_start_goes_through_wmi_to_the_windowless_launcher(detached):
+    wt._start_detached(LANE_OPEN, {"PATH": "p"})
+    command = detached["started"][0]
+    assert command[:3] == ["powershell.exe", "-NoProfile", "-EncodedCommand"]
+    script = base64.b64decode(command[3]).decode("utf-16-le")
+    assert "Win32_Process -MethodName Create" in script
+    assert "pythonw.exe" in script and wt.BRIDGE_FLAG in script and "wt.py" in script
+    assert detached["payload"] == {"command": LANE_OPEN, "env": {"PATH": "p"},
+                                   "show": wt.SW_SHOWNOACTIVATE}
+    assert _left_behind(detached) == [], "the environment stayed on disk"
+
+
+def test_a_window_that_did_not_open_is_a_refusal_and_leaves_nothing(detached):
+    detached["answer"] = "1"
+    with pytest.raises(TerminalError):
+        wt._start_detached(LANE_OPEN, {})
+    assert _left_behind(detached) == []
+
+
+def test_wmi_refusing_the_launcher_is_a_refusal(detached):
+    detached["exit"], detached["answer"] = 8, None
+    with pytest.raises(TerminalError, match="8"):
+        wt._start_detached(LANE_OPEN, {})
+    assert _left_behind(detached) == []
+
+
+def test_a_launcher_that_never_reports_is_a_refusal(detached, monkeypatch):
+    detached["answer"] = None
+    monkeypatch.setattr(wt, "BRIDGE_WAIT", -1.0)
+    with pytest.raises(TerminalError, match="report back"):
+        wt._start_detached(LANE_OPEN, {})
+    assert _left_behind(detached) == []
+
+
+def test_no_windowless_python_is_a_refusal(monkeypatch, tmp_path):
+    monkeypatch.setattr(wt.sys, "executable", str(tmp_path / "python.exe"))
+    with pytest.raises(TerminalError, match="pythonw"):
+        wt._start_detached(LANE_OPEN, {})
+
+
+@needs_powershell
+def test_the_real_launcher_reports_the_exit_code(tmp_path):
+    payload = tmp_path / "open.json"
+    payload.write_text(json.dumps({"command": [sys.executable, "-c", "raise SystemExit(3)"],
+                                   "env": dict(os.environ), "show": wt.SW_SHOWNOACTIVATE}),
+                       encoding="utf-8")
+    wt.run_bridge(str(payload))
+    assert Path(str(payload) + ".rc").read_text(encoding="utf-8") == "3"
+
+
+@needs_powershell
+def test_the_real_launcher_reports_why_it_could_not_start(tmp_path):
+    payload = tmp_path / "open.json"
+    payload.write_text(json.dumps({"command": ["kit-no-such-program-xyz"], "env": dict(os.environ),
+                                   "show": wt.SW_SHOWNOACTIVATE}), encoding="utf-8")
+    wt.run_bridge(str(payload))
+    assert "FileNotFoundError" in Path(str(payload) + ".rc").read_text(encoding="utf-8")
+
+
+@needs_powershell
+def test_the_program_behind_the_front_window_can_be_read():
+    front = wt.front_window()
+    if front.handle is None:
+        pytest.skip("nothing in front to ask about")
+    assert isinstance(wt.image_of(front.handle), str)
+    assert wt.image_of(None) == ""
+
+
+class _Download:
+    def __init__(self, blob):
+        self.blob = blob
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.blob
+
+
+def _portable_zip():
+    home = f"terminal-{wt.SECOND_TERMINAL_VERSION}"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(f"{home}/wt.exe", "stub")
+    return buffer.getvalue()
+
+
+def test_the_install_refuses_a_download_with_the_wrong_hash(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(wt.urllib.request, "urlopen", lambda url, timeout: _Download(b"not it"))
+    with pytest.raises(TerminalError, match="nothing was installed"):
+        wt.install_second_terminal()
+    assert wt.second_terminal() is None and list(tmp_path.iterdir()) == []
+
+
+def test_the_install_unpacks_marks_portable_and_carries_the_settings(monkeypatch, tmp_path):
+    blob = _portable_zip()
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(wt, "SECOND_TERMINAL_SHA256", hashlib.sha256(blob).hexdigest())
+    monkeypatch.setattr(wt.urllib.request, "urlopen", lambda url, timeout: _Download(blob))
+    settings = tmp_path / wt.INSTALLED_SETTINGS
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"theme": "the owner\'s"}', encoding="utf-8")
+    home = wt.install_second_terminal()
+    assert wt.second_terminal() == str(home / "wt.exe")
+    assert (home / ".portable").is_file()
+    assert (home / "settings" / "settings.json").read_text(encoding="utf-8") == settings.read_text(encoding="utf-8")
+
+
+def test_the_install_does_nothing_when_it_is_already_there(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    home = wt.second_terminal_home()
+    home.mkdir(parents=True)
+    (home / "wt.exe").write_text("stub", encoding="utf-8")
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("downloaded over an installed copy")
+
+    monkeypatch.setattr(wt.urllib.request, "urlopen", refuse)
+    assert wt.install_second_terminal() == home
+
+
+def test_no_local_app_data_means_no_second_copy(monkeypatch):
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert wt.second_terminal_home() is None and wt.second_terminal() is None
+    with pytest.raises(TerminalError):
+        wt.install_second_terminal()
 
 
 def test_no_terminal_is_a_refusal_not_a_traceback(monkeypatch):

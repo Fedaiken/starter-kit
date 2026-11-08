@@ -82,6 +82,80 @@ def test_the_report_names_the_window_not_the_session_id(log, capsys):
     assert "(ended) abc-123" in capsys.readouterr().out
 
 
+# --- a desk or lane window in auto mode (2026-11-07) ---------------------------
+
+LIVE = [{"name": "lane-alpha", "sessionId": "abc-123"},
+        {"name": "lane-beta", "sessionId": "def-456"}]
+
+
+def call_in(mode, session="abc-123"):
+    """One tool call the lane guard is handed, as it records it."""
+    return np.note_mode({"session_id": session, "permission_mode": mode}, "lane-alpha")
+
+
+def test_the_switch_is_recorded_once_however_many_calls_it_refuses(log):
+    assert call_in("auto") is True
+    assert call_in("auto") is False and call_in("auto") is False
+    assert len(np.read_log(log)) == 1
+    assert np.auto_mode_windows(LIVE) == ["lane-alpha"]
+
+
+def test_the_switch_clears_when_the_mode_is_back(log):
+    call_in("auto")
+    assert call_in("acceptEdits") is True
+    assert np.auto_mode_windows(LIVE) == []
+    assert call_in("acceptEdits") is False, "one row back, not one per call"
+    call_in("auto")
+    assert np.auto_mode_windows(LIVE) == ["lane-alpha"], "a second switch shows again"
+
+
+def test_a_window_never_in_auto_mode_writes_nothing(log):
+    assert call_in("acceptEdits") is False
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("payload", [{}, {"session_id": "abc-123"},
+                                     {"permission_mode": "auto"},
+                                     {"session_id": 7, "permission_mode": "auto"}])
+def test_a_call_without_a_session_or_a_mode_writes_nothing(log, payload):
+    assert np.note_mode(payload, "lane-alpha") is False
+    assert not log.exists()
+
+
+def test_only_live_windows_are_named(log):
+    call_in("auto", session="gone-999")
+    assert np.auto_mode_windows(LIVE) == []
+
+
+def test_the_switch_survives_a_rollover(log, monkeypatch):
+    call_in("auto")
+    monkeypatch.setattr(np, "LOG_BYTE_CAP", 10)
+    run_hook(monkeypatch, json.dumps(PAYLOAD))      # a pop-up row rolls the log over
+    assert np.read_log(log.with_suffix(".jsonl.1"))
+    assert np.auto_mode_windows(LIVE) == ["lane-alpha"]
+
+
+def test_the_banner_shows_the_switch_once_and_clears(log, tmp_path, monkeypatch):
+    """`open_terminal.stalled_lines`, the banner every desk act prints."""
+    import open_terminal as ot
+    monkeypatch.setattr(ot, "RECORD", tmp_path / "launch_record.jsonl")
+    monkeypatch.setattr(ot, "desk_meter_line", lambda sessions=None: "THIS DESK")
+    live = [{"name": "lane-alpha", "sessionId": "abc-123", "status": "idle"}]
+    line = (f"{ot.NEEDS_OWNER} -- the `lane-alpha` tab is in auto mode: "
+            f"Shift+Tab it back to accept edits")
+    call_in("auto")
+    call_in("auto")
+    assert ot.stalled_lines(live, meters={}).count(line) == 1
+    call_in("acceptEdits")
+    assert not any("auto mode" in said for said in ot.stalled_lines(live, meters={}))
+
+
+def test_the_report_counts_pop_ups_not_mode_rows(log, capsys):
+    call_in("auto")
+    np.report(log, {})
+    assert "no permission pop-ups recorded" in capsys.readouterr().out
+
+
 def test_the_tracked_settings_register_the_hook_and_let_lanes_run_the_scripts():
     """The interpreter and the allow rules are this machine's
     (`project_identity`): `.venv/Scripts/python.exe` and a PowerShell rule on

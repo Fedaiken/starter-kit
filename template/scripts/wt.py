@@ -100,16 +100,58 @@ Measured that evening on Terminal 1.24.12741.0, with the game in front:
    WINDOW, above).
 4. A ``-w <name>`` that CREATES its window did not take the front, every run.
 
-So :func:`launch` starts Terminal minimized and not activated
-(:func:`startup_info`). Terminal has no flag for it; Windows hands a program
-the show state its starter asks for. It does NOT reliably minimize: a window
-Terminal created with it came up minimized in two runs and, in a clean third,
-not minimized but behind the window in front. In none did it take the front.
+So a join starts Terminal minimized and not activated (:func:`startup_info`).
+Terminal has no flag for it; Windows hands a program the show state its starter
+asks for. It does NOT reliably minimize: a window Terminal created with it came
+up minimized in two runs and, in a clean third, not minimized but behind the
+window in front.
 
-THE PROOF IS EVERY REAL OPEN, NOT A TEST LAUNCH. Test launches landed on the
-owner's play that evening, so none is run any more: :func:`launch` reads the
-window in front before the open and a second after -- read only -- and returns
-a :class:`FocusCheck`, which the opener records and prints as ``FOCUS MOVED``
+WITH A TERMINAL WINDOW IN FRONT, A NEW WINDOW TOOK THE FRONT ANYWAY
+(launch record, 2026-11-07 22:58: ``◑ syxplay`` -> ``✳ janitor-reach``). Real
+launches that night, Terminal 1.24.12741.0, front sampled every 30 ms, three
+runs of each. There are three causes, and removing any one left the theft:
+
+1. The window was created by the Terminal that owned the front. Terminal is one
+   process with one thread for every window (read off the live windows), and a
+   second ``wt.exe`` only hands its command line to that process
+   (``WindowEmperor.cpp``, ``acquireMutexOrAttemptHandoff``). A window it
+   created took the front while still hidden, 0.1 s in, before Terminal ever
+   showed it. The show state cannot reach that. A copy of Terminal at another
+   path is another process (the same file: unpackaged, the instance key carries
+   a hash of the path).
+2. The launch descended from Terminal: every open here runs in a shell inside a
+   Terminal tab. Windows lets a process "started by the foreground process" take
+   the front
+   (https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow,
+   retrieved: 2026-11-07). A separate copy of Terminal started from such a
+   shell took the front the same way. Started by WMI instead, whose parent is a
+   Windows service, it did not.
+3. A window started minimized gets restored, and the restore took the front.
+   Terminal restores an iconic window when its pseudoconsole reports "show",
+   through a 200 ms throttle (``AppHost.cpp`` ``_showHideWindowThrottler``,
+   ``IslandWindow::ShowWindowChanged``; source tag v1.24.12741.0, retrieved:
+   2026-11-07). Measured: iconic, then open 0.19 s later, in front. What sets
+   the report off was not traced. It runs only on an iconic window, so a window
+   never minimized cannot hit it.
+
+So once the second copy is installed, every NEW window is started by
+:func:`_start_detached` (WMI, then a windowless Python that runs ``wt.exe``),
+not minimized and not activated (``SW_SHOWNOACTIVATE``), by a copy of Terminal
+that does not own the front (:func:`terminal_for`). Measured with Terminal,
+Notepad, and a window of the second copy in front: three runs of three each,
+the front never moved and the new window sat BELOW the window in front. A join
+is not changed: it has to go to the copy holding the named window.
+
+The second copy is Microsoft's own portable build, kept once per machine and
+installed only by hand: ``python scripts/wt.py --install-second``, which is the
+owner's to run (:func:`install_second_terminal`). Until then :func:`launch`
+opens exactly as it did before this was built, and a new window opened with
+Terminal in front can still take the front (``FOCUS MOVED``).
+
+THE PROOF IS EVERY REAL OPEN. The test suite launches nothing, because test
+launches landed on the owner's play: :func:`launch` reads the window in front
+before the open and a second after -- read only -- and returns a
+:class:`FocusCheck`, which the opener records and prints as ``FOCUS MOVED``
 when the window changed.
 
 WHERE THERE IS NO WINDOWS TERMINAL: THE MANUAL LINE
@@ -128,13 +170,19 @@ shell, and it stays at its prompt when the session ends.
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Mapping, NamedTuple, Sequence
 
@@ -431,11 +479,15 @@ def manual_line(window: Window, *, cwd: Path | str, os_name: str | None = None) 
 #: Win32 ``SW_SHOWMINNOACTIVE``: shown minimized, and not activated.
 SW_SHOWMINNOACTIVE = 7
 
+#: Win32 ``SW_SHOWNOACTIVATE``: shown at its size, and not activated. Every new
+#: window: one never minimized cannot be restored into the front.
+SW_SHOWNOACTIVATE = 4
+
 
 def startup_info():
-    """How every window is started: minimized and not activated, so an open
-    never takes the front from whatever the owner has there. ``None`` off
-    Windows, where there is no Terminal to start."""
+    """How a join is started: minimized and not activated. ``None`` off
+    Windows, where there is no Terminal to start. A new window is started by
+    :func:`_start_detached` instead."""
     if os.name != "nt":
         return None
     info = subprocess.STARTUPINFO()
@@ -606,6 +658,180 @@ class FocusCheck(NamedTuple):
         return f"FOCUS MOVED: {self.before or '(nothing)'} -> {self.after or '(nothing)'}"
 
 
+# --- the second copy of Terminal, and a start that does not descend from this one
+
+
+#: Microsoft's portable build, the same version as the installed Terminal.
+#: Source: the release asset at SECOND_TERMINAL_URL, retrieved: 2026-11-07; the
+#: hash is of that file, and its three programs carry a valid Microsoft
+#: signature.
+SECOND_TERMINAL_VERSION = "1.24.12741.0"
+SECOND_TERMINAL_URL = (
+    f"https://github.com/microsoft/terminal/releases/download/v{SECOND_TERMINAL_VERSION}/"
+    f"Microsoft.WindowsTerminal_{SECOND_TERMINAL_VERSION}_x64.zip"
+)
+SECOND_TERMINAL_SHA256 = "7aaa8321064c45d5af79205db13deb87f146f644bd8abdfae29f0155d7ce744e"
+
+#: Where the installed Terminal keeps the owner's settings.
+INSTALLED_SETTINGS = (
+    "Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState/settings.json"
+)
+
+
+def second_terminal_home() -> Path | None:
+    """The folder the second copy lives in, once per machine and shared by every
+    project. ``None`` where there is no ``LOCALAPPDATA``."""
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        return None
+    return Path(base) / "StarterKit" / "second-terminal" / f"terminal-{SECOND_TERMINAL_VERSION}"
+
+
+def second_terminal() -> str | None:
+    """The second copy's ``wt.exe``, or ``None`` when it is not installed."""
+    home = second_terminal_home()
+    return str(home / "wt.exe") if home is not None and (home / "wt.exe").is_file() else None
+
+
+def install_second_terminal() -> Path:
+    """Download, check and unpack the second copy, and give it the owner's
+    settings. Does nothing when it is already there. Refuses a download whose
+    hash is not the one on file."""
+    home = second_terminal_home()
+    if home is None:
+        raise TerminalError("LOCALAPPDATA is not set, so there is nowhere to put a second Terminal")
+    if (home / "wt.exe").is_file():
+        return home
+    with urllib.request.urlopen(SECOND_TERMINAL_URL, timeout=300) as response:
+        blob = response.read()
+    digest = hashlib.sha256(blob).hexdigest()
+    if digest != SECOND_TERMINAL_SHA256:
+        raise TerminalError(f"the download's hash is {digest}, not {SECOND_TERMINAL_SHA256}; nothing was installed")
+    home.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        archive.extractall(home.parent)  # the archive's top folder is the home's name
+    # This empty file is what makes Terminal keep its settings beside itself.
+    (home / ".portable").touch()
+    settings = Path(os.environ["LOCALAPPDATA"]) / INSTALLED_SETTINGS
+    if settings.is_file():
+        (home / "settings").mkdir(exist_ok=True)
+        shutil.copyfile(settings, home / "settings" / "settings.json")
+    return home
+
+
+def image_of(handle: int | None) -> str:
+    """The program behind a window, as a full path; ``""`` when it cannot be
+    read. Read only."""
+    if os.name != "nt" or not handle:
+        return ""
+    import ctypes
+    from ctypes import wintypes
+
+    user = ctypes.WinDLL("user32")
+    kernel = ctypes.WinDLL("kernel32")
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    pid = wintypes.DWORD()
+    user.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+    process = kernel.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not process:
+        return ""
+    try:
+        size = wintypes.DWORD(1024)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(size)):
+            return ""
+        return buffer.value
+    finally:
+        kernel.CloseHandle(process)
+
+
+def terminal_for(front: Front, *, second: str) -> str:
+    """The ``wt.exe`` that opens a new window: never the copy of Terminal whose
+    window is in front (WITH A TERMINAL WINDOW IN FRONT, above)."""
+    if not front.terminal:
+        return TERMINAL
+    owner = os.path.normcase(os.path.dirname(image_of(front.handle)))
+    return TERMINAL if owner == os.path.normcase(os.path.dirname(second)) else second
+
+
+def is_new_window(command: Sequence[str]) -> bool:
+    """Whether an invocation creates a window of its own (``-w new``)."""
+    return list(command)[1:3] == ["-w", "new"]
+
+
+#: The flag this file answers when WMI starts it as the windowless launcher.
+BRIDGE_FLAG = "--bridge"
+
+#: Seconds the opener waits for the windowless launcher to report back.
+BRIDGE_WAIT = 30.0
+
+
+def run_bridge(payload: str) -> None:
+    """Run the one command in ``payload`` and write its result beside it.
+
+    This is the process WMI starts. It takes its command from a file because a
+    Terminal invocation carries the environment too, and WMI's command line
+    has no room for one.
+    """
+    result = Path(payload + ".rc")
+    try:
+        data = json.loads(Path(payload).read_text(encoding="utf-8"))
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        info.wShowWindow = data["show"]
+        code = subprocess.run(data["command"], env=data["env"], startupinfo=info,
+                              check=False).returncode
+        text = str(code)
+    except Exception as error:  # the opener is waiting and must hear why
+        text = f"{type(error).__name__}: {error}"
+    partial = result.with_suffix(".part")
+    partial.write_text(text, encoding="utf-8")
+    os.replace(partial, result)
+
+
+def _start_detached(command: Sequence[str], env: Mapping[str, str]) -> None:
+    """Start ``command`` from a process that does not descend from this one.
+
+    WMI starts a windowless Python, which runs ``wt.exe`` not minimized and not
+    activated. WMI cannot start ``wt.exe`` itself: it is a Store alias, and WMI
+    answers 8 for it (measured 2026-11-07). Raises when the launcher could not
+    be started, or ``wt.exe`` did not exit 0.
+    """
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    if not pythonw.is_file():
+        raise TerminalError(f"no {pythonw}, so a window cannot be started without taking the front")
+    handle, payload = tempfile.mkstemp(prefix="wt-open-", suffix=".json")
+    result = Path(payload + ".rc")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump({"command": list(command), "env": dict(env), "show": SW_SHOWNOACTIVATE}, stream)
+        line = subprocess.list2cmdline(
+            [str(pythonw), "-I", str(Path(__file__).resolve()), BRIDGE_FLAG, payload])
+        script = ("$ProgressPreference = 'SilentlyContinue'; $r = Invoke-CimMethod -ClassName "
+                  f"Win32_Process -MethodName Create -Arguments @{{ CommandLine = {ps_quote(line)} }}; "
+                  "exit $r.ReturnValue")
+        started = subprocess.run([SHELL, "-NoProfile", "-EncodedCommand", encode_command(script)],
+                                 capture_output=True, check=False)
+        if started.returncode != 0:
+            raise TerminalError(f"WMI could not start the launcher: return value {started.returncode}")
+        deadline = time.monotonic() + BRIDGE_WAIT
+        while not result.exists():
+            if time.monotonic() > deadline:
+                raise TerminalError(f"the launcher did not report back within {BRIDGE_WAIT:.0f} s")
+            time.sleep(0.05)
+        outcome = result.read_text(encoding="utf-8")
+        if outcome != "0":
+            raise TerminalError(f"{command[0]} did not open the window: {outcome}")
+    finally:
+        for leftover in (Path(payload), result):
+            leftover.unlink(missing_ok=True)
+
+
 def launch(command: Sequence[str], *, env: Mapping[str, str] | None = None) -> FocusCheck:
     """Open one window, and say whether the front moved.
 
@@ -613,17 +839,37 @@ def launch(command: Sequence[str], *, env: Mapping[str, str] | None = None) -> F
     without the caller asking. A caller who has to remember to clean it is the
     arrangement that produced the child-session defect in the first place.
 
-    The window starts minimized and not activated (:func:`startup_info`), the
-    same way, for every caller: nothing a caller passes turns that off. The
-    window in front is read before and after (:class:`FocusCheck`), so every
-    real open proves that, or names the window that took the front.
+    With the second copy installed, a new window goes through
+    :func:`_start_detached`, from the copy of Terminal that does not own the
+    front. A join, and any open with no second copy, is started minimized and
+    not activated (:func:`startup_info`). Nothing a caller passes changes
+    which. The window in front is read before and after (:class:`FocusCheck`),
+    so every real open proves that, or names the window that took the front.
     """
     if not available():
         raise TerminalError(
             f"{TERMINAL} is not on PATH, so no window can be opened from here"
         )
     before, known = front_window(), terminal_windows()
-    subprocess.run(list(command), check=True, env=child_environment(env),
-                   startupinfo=startup_info())
+    cleaned = child_environment(env)
+    second = second_terminal()
+    if second is not None and is_new_window(command):
+        _start_detached([terminal_for(before, second=second), *list(command)[1:]], cleaned)
+    else:
+        subprocess.run(list(command), check=True, env=cleaned, startupinfo=startup_info())
     time.sleep(FOCUS_CHECK_DELAY)
     return FocusCheck.read(before, front_window(), known, window_title(command))
+
+
+#: The flag that installs the second copy, once per machine.
+INSTALL_FLAG = "--install-second"
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == [BRIDGE_FLAG]:
+        run_bridge(sys.argv[2])
+    elif sys.argv[1:] == [INSTALL_FLAG]:
+        print(install_second_terminal())
+    else:
+        print(f"usage: wt.py {INSTALL_FLAG}", file=sys.stderr)
+        sys.exit(2)

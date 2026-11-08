@@ -35,6 +35,24 @@ This file is kit-owned (ported 2026-09-24 from FACOWORK by way of HAZELHURST
 into the Starter Kit): identical in every seeded project, and an improvement
 made here goes back with `<venv python> scripts/kit_sync.py push scripts/lane_guard.py`.
 
+AUTO MODE -- A DESK'S OR A LANE'S WINDOW (2026-11-07). The launcher opens every
+window in accept-edits mode (`--permission-mode acceptEdits`), and a window can
+leave it while it sits at a permission pop-up: a desk's transcript that day ran
+acceptEdits -> auto -> acceptEdits, the last switch the owner's. The owner
+never uses auto mode, and nobody watches a lane's tab to see the switch. So in
+a window whose `<PROJECT>_ROLE` is `desk` or `lane`, every tool call the hook
+is handed while its input's `permission_mode` is `auto` is refused, with one
+line naming the fix. The field and its values ("default", "plan",
+"acceptEdits", "auto", "dontAsk", "bypassPermissions") are the hooks
+reference's, https://code.claude.com/docs/en/hooks (retrieved 2026-11-07);
+`scripts/note_prompt.py` logs the same field. The hook is wired on the shell
+tools, so the refusal lands on the window's next shell command; a wider
+matcher is a settings change and needs nothing here. Only the owner can press
+Shift+Tab, so the guard also records the switch, and the switch back, in the
+pop-up log (`note_prompt.note_mode`), and every desk act's banner names the tab
+until the window's next call shows the mode back (`open_terminal.stalled_lines`).
+A window with no role -- the owner's own -- is untouched.
+
 RECURSIVE DELETES (F57, S3). A lane also never deletes a tree anywhere but its
 own scratchpad. At Session 3 an applying lane that could not land a block wrote
 scratch scripts to rehearse the apply, then ran `rm -rf` on a variable path to
@@ -122,6 +140,14 @@ for _stream in (sys.stdout, sys.stderr):
 
 LANE_ROLE = "lane"
 SHELL_TOOLS = ("Bash", "PowerShell")
+
+
+#: The windows the auto-mode rule holds in: the ones the launcher opens.
+GUARDED_ROLES = ("desk", "lane")
+#: The `permission_mode` Claude Code hands a hook in auto mode
+#: (https://code.claude.com/docs/en/hooks, retrieved 2026-11-07).
+AUTO_MODE = "auto"
+AUTO_REFUSAL = "this window is in auto mode; Shift+Tab back to accept edits, then go on."
 
 #: git subcommands a lane never runs, each with what it would do to the room.
 REFUSED = {
@@ -884,6 +910,31 @@ def refused_popups(command: str, environ: dict[str, str], cwd: str | None,
     return found
 
 
+# --- a desk or lane window in auto mode ----------------------------------------
+
+
+def auto_mode_refusal(payload: dict, environ: dict[str, str]) -> str | None:
+    """AUTO_REFUSAL when a desk's or a lane's window is in auto mode, whatever
+    the tool; None otherwise, and always None in a window with no role."""
+    if environ.get(ROLE_ENV) in GUARDED_ROLES and \
+            payload.get("permission_mode") == AUTO_MODE:
+        return AUTO_REFUSAL
+    return None
+
+
+def note_mode(payload: dict, environ: dict[str, str]) -> None:
+    """Record a desk's or a lane's switch into auto mode, and back, where the
+    pop-up log keeps its stalls, so the desk's banner can name the tab. Best
+    effort: a record that cannot be written never changes the verdict."""
+    if environ.get(ROLE_ENV) not in GUARDED_ROLES:
+        return
+    try:
+        import note_prompt
+        note_prompt.note_mode(payload, environ.get(WINDOW_ENV))
+    except Exception:  # noqa: BLE001 -- the guard runs on every call; it must not fail
+        pass
+
+
 # --- the verdict ---------------------------------------------------------------
 
 
@@ -892,6 +943,10 @@ def verdict(payload: dict, environ: dict[str, str], *,
     """The refusal to show the window, or None to allow. `windows` says how
     paths are read; it defaults to this machine."""
     windows = is_windows() if windows is None else windows
+    # Before the tool is asked: a wider matcher needs no change here.
+    auto = auto_mode_refusal(payload, environ)
+    if auto:
+        return auto
     tool = payload.get("tool_name")
     if tool not in SHELL_TOOLS:
         return None
@@ -950,7 +1005,9 @@ def main(argv: Sequence[str] = ()) -> int:
         return 0  # an unreadable payload is not a reason to stop a window
     if not isinstance(payload, dict):
         return 0
-    said = verdict(payload, dict(os.environ))
+    environ = dict(os.environ)
+    note_mode(payload, environ)
+    said = verdict(payload, environ)
     if said is None:
         return 0
     print(said, file=sys.stderr)

@@ -1431,16 +1431,28 @@ def stalled_lines(live_here: Sequence[dict] | None = None, *,
             import note_prompt
             last: dict[str, dict] = {}
             for entry in note_prompt.read_log(note_prompt.LOG):
-                last[str(entry.get("session"))] = entry
+                if entry.get("event") != note_prompt.MODE_EVENT:
+                    last[str(entry.get("session"))] = entry
             for row in sorted(stalled, key=lambda r: str(r.get("name"))):
                 entry = last.get(str(row.get("sessionId")))
                 what = (f"{entry.get('tool')}: {entry.get('what')}" if entry
                         else "no pop-up on record -- it may be asking the owner a question")
                 lines.append(f"{NEEDS_OWNER} -- the `{row.get('name')}` tab is stopped "
                              f"and waiting for the owner: {what}")
-            lines.append("  Tell the owner which tab, in this turn.")
     except Exception:  # noqa: BLE001
         pass
+    try:
+        # A desk or lane window in auto mode (2026-11-07): `lane_guard.py`
+        # refuses its tool calls and records the switch. Refused, it is busy
+        # or idle, never `waiting`, so only the record can name it.
+        import note_prompt
+        for name in note_prompt.auto_mode_windows(live_here):
+            lines.append(f"{NEEDS_OWNER} -- the `{name}` tab is in auto mode: "
+                         f"Shift+Tab it back to accept edits")
+    except Exception:  # noqa: BLE001
+        pass
+    if lines:
+        lines.append("  Tell the owner which tab, in this turn.")
     try:
         if meters is None:
             meters = window_meters(live_here)
